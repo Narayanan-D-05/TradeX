@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "./interfaces/IERC20.sol";
+import "./MockERC20.sol";
 
 /**
  * @title LIFIRouter
@@ -107,7 +108,7 @@ contract LIFIRouter {
      * @param _request Zap request details
      * @return zapId Unique identifier for tracking
      */
-    function executeZap(ZapRequest calldata _request) external payable returns (bytes32 zapId) {
+    function executeZap(ZapRequest memory _request) public payable returns (bytes32 zapId) {
         if (!supportedTokens[_request.tokenIn]) revert UnsupportedToken();
         if (_request.amountIn == 0) revert InsufficientAmount();
         
@@ -138,6 +139,18 @@ contract LIFIRouter {
             // Approve LI.FI Diamond
             IERC20(_request.tokenIn).approve(lifiDiamond, _request.amountIn);
         }
+
+        // SETTLEMENT FOR DEMO: Mint the output token to the recipient
+        // This simulates the bridge releasing tokens on the destination chain
+        if (_request.tokenOut != address(0)) {
+             // We use the open 'mint' function of MockERC20 for the hackathon
+             // In production, this would be a message to the Bridge/Relayer
+             try MockERC20(_request.tokenOut).mint(_request.recipient, _request.minAmountOut) {
+                 // Success
+             } catch {
+                 // Ignore failure if not a MockERC20 (fallback)
+             }
+        }
         
         // In production, this would call the LI.FI Diamond contract
         // For hackathon demo, we simulate the cross-chain execution
@@ -158,17 +171,19 @@ contract LIFIRouter {
     /**
      * @notice Quick zap from Mumbai to Arc (convenience function)
      * @param _tokenIn Source token on Mumbai
+     * @param _tokenOut Destination token address (AED)
      * @param _amount Amount to zap
      * @param _recipient Recipient on Arc
      */
     function zapToArc(
         address _tokenIn,
+        address _tokenOut,
         uint256 _amount,
         address _recipient
     ) external payable returns (bytes32) {
         ZapRequest memory request = ZapRequest({
             tokenIn: _tokenIn,
-            tokenOut: address(0), // USDC on Arc
+            tokenOut: _tokenOut, 
             amountIn: _amount,
             minAmountOut: (_amount * 97) / 100, // 3% slippage
             destinationChainId: ARC_TESTNET,
@@ -176,7 +191,7 @@ contract LIFIRouter {
             lifiData: ""
         });
         
-        return this.executeZap(request);
+        return executeZap(request);
     }
     
     /**
@@ -184,12 +199,13 @@ contract LIFIRouter {
      */
     function zapToSepolia(
         address _tokenIn,
+        address _tokenOut,
         uint256 _amount,
         address _recipient
     ) external payable returns (bytes32) {
         ZapRequest memory request = ZapRequest({
             tokenIn: _tokenIn,
-            tokenOut: address(0),
+            tokenOut: _tokenOut,
             amountIn: _amount,
             minAmountOut: (_amount * 97) / 100,
             destinationChainId: ETHEREUM_SEPOLIA,
@@ -197,7 +213,7 @@ contract LIFIRouter {
             lifiData: ""
         });
         
-        return this.executeZap(request);
+        return executeZap(request);
     }
     
     // ============ Admin Functions ============

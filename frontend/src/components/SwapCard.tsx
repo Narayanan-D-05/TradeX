@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount, useWriteContract, useReadContract, useSignTypedData } from 'wagmi';
+import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient } from 'wagmi';
 import { parseEther, parseUnits, formatEther } from 'viem';
 
 // Contract ABIs
@@ -87,6 +87,7 @@ const LIFI_ABI = [
         type: 'function',
         inputs: [
             { name: '_tokenIn', type: 'address' },
+            { name: '_tokenOut', type: 'address' },
             { name: '_amount', type: 'uint256' },
             { name: '_recipient', type: 'address' }
         ],
@@ -98,6 +99,7 @@ const LIFI_ABI = [
         type: 'function',
         inputs: [
             { name: '_tokenIn', type: 'address' },
+            { name: '_tokenOut', type: 'address' },
             { name: '_amount', type: 'uint256' },
             { name: '_recipient', type: 'address' }
         ],
@@ -106,13 +108,13 @@ const LIFI_ABI = [
     }
 ] as const;
 
-// Contract addresses from environment
+// Contract addresses (newly deployed)
 const CONTRACTS = {
-    TRADEX: process.env.NEXT_PUBLIC_TRADEX as `0x${string}`,
-    INR_STABLE: process.env.NEXT_PUBLIC_INR_STABLE as `0x${string}`,
-    AED_STABLE: process.env.NEXT_PUBLIC_AED_STABLE as `0x${string}`,
-    YELLOW_ADAPTER: process.env.NEXT_PUBLIC_YELLOW_ADAPTER as `0x${string}`,
-    LIFI_ROUTER: process.env.NEXT_PUBLIC_LIFI_ROUTER as `0x${string}`,
+    TRADEX: '0x51720634A94ba904567a64b701007eAD2Fd6E9Ba' as `0x${string}`,
+    INR_STABLE: '0x228afECAb39932F0A83EfA03DBAd1dc20E954B7f' as `0x${string}`,
+    AED_STABLE: '0x9CE41E2fBCe064734883c7789726Dcc9e358569C' as `0x${string}`,
+    YELLOW_ADAPTER: '0x3fD1c3554C0b1F5f4A16FBb48D8F14D1a1f7B9C5' as `0x${string}`,
+    LIFI_ROUTER: '0x9847abAbD6B8E64c726BB8c4EB2Fc4939E069194' as `0x${string}`,
 };
 
 interface SwapCardProps {
@@ -123,13 +125,15 @@ interface SwapCardProps {
 export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const [amount, setAmount] = useState('');
     const [recipient, setRecipient] = useState('');
-    const [step, setStep] = useState<'idle' | 'opening-session' | 'approving' | 'swapping' | 'success' | 'error'>('idle');
+    const [step, setStep] = useState<'idle' | 'opening-session' | 'approving' | 'swapping' | 'success' | 'error' | 'minting'>('idle');
     const [txHash, setTxHash] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [useGasless, setUseGasless] = useState(true);
 
-    const { address, isConnected } = useAccount();
+    const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
+    const publicClient = usePublicClient();
+    const { switchChainAsync } = useSwitchChain();
 
     // Check if user has active Yellow session
     const { data: hasSession } = useReadContract({
@@ -158,6 +162,16 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const sourceNetwork = isFundBroker ? 'Ethereum Sepolia' : 'Arc Testnet';
     const destNetwork = isFundBroker ? 'Arc Testnet' : 'Ethereum Sepolia';
 
+    const sourceTokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
+
+    // Fetch Token Balance
+    const { data: tokenBalance, refetch: refetchBalance } = useReadContract({
+        address: sourceTokenAddress,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: address ? [address] : undefined,
+    });
+
     const calculateOutput = () => {
         if (!amount || isNaN(parseFloat(amount))) return '0';
         const inputAmount = parseFloat(amount);
@@ -175,34 +189,67 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         return (grossOutput * PLATFORM_FEE).toLocaleString('en-IN', { maximumFractionDigits: 2 });
     };
 
+    // Helper to ensure correct network
+    const ensureNetwork = async (targetChainId: number) => {
+        if (!chainId || chainId !== targetChainId) {
+            try {
+                await switchChainAsync({ chainId: targetChainId });
+                return true;
+            } catch (error) {
+                console.error('Failed to switch network:', error);
+                setErrorMsg('Please switch to the correct network');
+                setStep('error');
+                return false;
+            }
+        }
+        return true;
+    };
+
     const openYellowSession = async () => {
         if (!isConnected) return;
 
         setStep('opening-session');
+
+        // Ensure strictly on Sepolia for Yellow Gasless demo
+        const isCorrectNetwork = await ensureNetwork(11155111);
+        if (!isCorrectNetwork) return;
+
         try {
-            // Open session with 0.005 ETH deposit for ~10 gasless transactions
+            // Open session with 0.01 ETH deposit (min requirement) for ~20 gasless transactions
             const hash = await writeContractAsync({
                 address: CONTRACTS.YELLOW_ADAPTER,
                 abi: YELLOW_ABI,
                 functionName: 'openSession',
                 args: [BigInt(3600)], // 1 hour session
-                value: parseEther('0.005'), // Small deposit
+                value: parseEther('0.01'), // Match contract minDeposit
             });
             console.log('Session opened:', hash);
             setStep('idle');
         } catch (error: any) {
             console.error('Failed to open session:', error);
-            setErrorMsg('Failed to open gasless session');
-            setStep('error');
+            // For Demo: If gasless fails (e.g. insufficient funds for deposit), allow proceeding without gasless
+            setErrorMsg('Gasless session failed, but you can proceed with standard gas.');
+            setTimeout(() => {
+                setErrorMsg(null);
+                setStep('idle');
+                setUseGasless(false); // Fallback to standard gas
+            }, 3000);
         }
     };
 
     const handleSwap = async () => {
-        if (!amount || !recipient || !isConnected || !address) return;
+        if (!amount || !recipient || !isConnected || !address || !publicClient) return;
 
         setStep('approving');
         setErrorMsg(null);
         setTxHash(null);
+
+        // Determine chain based on mode
+        const targetChainId = isFundBroker ? 11155111 : 5042002; // Sepolia or Arc
+
+        // Ensure network before starting
+        const isCorrectNetwork = await ensureNetwork(targetChainId);
+        if (!isCorrectNetwork) return;
 
         try {
             const amountInWei = parseUnits(amount, 18);
@@ -221,6 +268,10 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             });
             console.log('Approval tx:', approveHash);
 
+            // Wait for approval confirmation
+            await publicClient.waitForTransactionReceipt({ hash: approveHash });
+            console.log('Approval confirmed');
+
             // Step 2: Execute cross-chain swap via LI.FI Router
             setStep('swapping');
             console.log('Executing LI.FI cross-chain zap...');
@@ -228,24 +279,26 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             let swapHash;
             if (isFundBroker) {
                 // INR (Sepolia) -> AED (Arc) via LI.FI zapToArc
+                const tokenOut = CONTRACTS.AED_STABLE; // Receiver gets AED
                 swapHash = await writeContractAsync({
                     address: CONTRACTS.LIFI_ROUTER,
                     abi: LIFI_ABI,
                     functionName: 'zapToArc',
-                    args: [tokenAddress, amountInWei, recipient as `0x${string}`],
-                    gas: BigInt(200000),
-                    maxFeePerGas: BigInt(1000000000),
+                    args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                    gas: BigInt(1000000),
+                    maxFeePerGas: BigInt(2000000000),
                     maxPriorityFeePerGas: BigInt(100000000),
                 });
             } else {
                 // AED (Arc) -> INR (Sepolia) via LI.FI zapToSepolia
+                const tokenOut = CONTRACTS.INR_STABLE; // Receiver gets INR
                 swapHash = await writeContractAsync({
                     address: CONTRACTS.LIFI_ROUTER,
                     abi: LIFI_ABI,
                     functionName: 'zapToSepolia',
-                    args: [tokenAddress, amountInWei, recipient as `0x${string}`],
-                    gas: BigInt(200000),
-                    maxFeePerGas: BigInt(1000000000),
+                    args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                    gas: BigInt(1000000),
+                    maxFeePerGas: BigInt(2000000000),
                     maxPriorityFeePerGas: BigInt(100000000),
                 });
             }
@@ -258,7 +311,13 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         } catch (error: any) {
             console.error('Swap failed:', error);
             setStep('error');
-            setErrorMsg(error.message || 'Transaction failed');
+            setErrorMsg(error.shortMessage || error.message || 'Transaction failed');
+        }
+    };
+
+    const handleMaxClick = () => {
+        if (tokenBalance) {
+            setAmount(formatEther(tokenBalance as bigint));
         }
     };
 
@@ -301,7 +360,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 disabled={step !== 'idle'}
                                 className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300"
                             >
-                                Open Session (0.005 ETH)
+                                Open Session (0.01 ETH)
                             </button>
                         )}
                     </div>
@@ -351,7 +410,22 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 <>
                     {/* From Input */}
                     <div className="mb-4">
-                        <label className="block text-sm text-gray-400 mb-2">You Send</label>
+                        <div className="flex justify-between mb-2">
+                            <label className="block text-sm text-gray-400">You Send</label>
+                            {isConnected && (
+                                <div className="text-xs flex gap-2 items-center">
+                                    <span className="text-gray-500">
+                                        Balance: {tokenBalance ? parseFloat(formatEther(tokenBalance as bigint)).toFixed(2) : '0'} {sourceToken}
+                                    </span>
+                                    <button
+                                        onClick={handleMaxClick}
+                                        className="text-indigo-400 hover:text-indigo-300 uppercase font-semibold"
+                                    >
+                                        Max
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                         <div className="relative">
                             <input
                                 type="number"
@@ -478,6 +552,53 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </>
             )}
 
+
+            {/* Faucet for Testing */}
+            {
+                isConnected && (
+                    <div className="mt-6 pt-6 border-t border-gray-800 text-center">
+                        <p className="text-xs text-gray-400 mb-2">Need test tokens?</p>
+                        <button
+                            onClick={async () => {
+                                if (!address || !publicClient) return;
+                                setStep('minting');
+                                const chainId = isFundBroker ? 11155111 : 5042002;
+                                try {
+                                    const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
+                                    const hash = await writeContractAsync({
+                                        address: tokenAddress,
+                                        abi: [
+                                            {
+                                                name: 'faucet',
+                                                type: 'function',
+                                                inputs: [],
+                                                outputs: [],
+                                                stateMutability: 'nonpayable'
+                                            }
+                                        ],
+                                        functionName: 'faucet',
+                                        args: [],
+                                    });
+                                    console.log('Mint tx:', hash);
+                                    await publicClient.waitForTransactionReceipt({ hash });
+                                    alert("Minted 10000 test tokens successfully!");
+                                    refetchBalance();
+                                    setStep('idle');
+                                } catch (e) {
+                                    console.error(e);
+                                    alert("Faucet failed. Make sure you are on the correct network.");
+                                    setStep('idle');
+                                }
+                            }}
+                            disabled={step !== 'idle'}
+                            className="text-xs text-indigo-400 hover:text-indigo-300 underline disabled:opacity-50"
+                        >
+                            {step === 'minting' ? 'Minting... (Please Wait)' : `Mint 10000 ${isFundBroker ? 'INR' : 'AED'} Test Tokens`}
+                        </button>
+                    </div>
+                )
+            }
+
             {/* Compliance Badge */}
             <div className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-500">
                 <svg className="w-4 h-4 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
@@ -485,6 +606,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </svg>
                 FEMA Compliant • KYC Verified • Yellow Network
             </div>
-        </div>
+        </div >
     );
 }
