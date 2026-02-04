@@ -39,6 +39,7 @@ contract LIFIRouter {
     
     address public owner;
     address public lifiDiamond; // LI.FI Diamond contract address
+    address public yellowAdapter; // Yellow Adapter for gasless txs
     
     mapping(bytes32 => Route) public routes;
     mapping(address => bool) public supportedTokens;
@@ -77,6 +78,7 @@ contract LIFIRouter {
     // ============ Errors ============
     
     error OnlyOwner();
+    error OnlyYellowAdapter();
     error UnsupportedToken();
     error UnsupportedRoute();
     error InsufficientAmount();
@@ -89,12 +91,18 @@ contract LIFIRouter {
         if (msg.sender != owner) revert OnlyOwner();
         _;
     }
+
+    modifier onlyYellowAdapter() {
+        if (msg.sender != yellowAdapter) revert OnlyYellowAdapter();
+        _;
+    }
     
     // ============ Constructor ============
     
-    constructor(address _lifiDiamond) {
+    constructor(address _lifiDiamond, address _yellowAdapter) {
         owner = msg.sender;
         lifiDiamond = _lifiDiamond;
+        yellowAdapter = _yellowAdapter;
         
         // Initialize default routes
         _addRoute(ETHEREUM_SEPOLIA, ARC_TESTNET, address(0), 30); // 0.3% fee
@@ -165,6 +173,66 @@ contract LIFIRouter {
         );
         
         // For demo: execute immediate mock completion
+        _simulateZapCompletion(zapId, _request);
+    }
+
+    /**
+     * @notice Execute a gasless cross-chain zap via Yellow Adapter
+     * @dev Only callable by YellowAdapter. Pulls tokens from _user (must have approval)
+     * @param _request Zap request details
+     * @param _user The original user who signed the meta-tx
+     */
+    function executeZapGasless(
+        ZapRequest memory _request,
+        address _user
+    ) public payable onlyYellowAdapter returns (bytes32 zapId) {
+        if (!supportedTokens[_request.tokenIn]) revert UnsupportedToken();
+        if (_request.amountIn == 0) revert InsufficientAmount();
+        
+        bytes32 routeKey = keccak256(abi.encodePacked(
+            block.chainid,
+            _request.destinationChainId
+        ));
+        
+        if (!routes[routeKey].active) revert UnsupportedRoute();
+        
+        zapId = keccak256(abi.encodePacked(
+            _user, // Use _user instead of msg.sender
+            _request.tokenIn,
+            _request.amountIn,
+            block.timestamp,
+            zapCount++
+        ));
+        
+        // Transfer tokens from USER (not adapter)
+        // User must have approved LIFIRouter beforehand
+        if (_request.tokenIn != address(0)) {
+            bool success = IERC20(_request.tokenIn).transferFrom(
+                _user,
+                address(this),
+                _request.amountIn
+            );
+            if (!success) revert TransferFailed();
+            
+            // Approve LI.FI Diamond
+            IERC20(_request.tokenIn).approve(lifiDiamond, _request.amountIn);
+        }
+
+        // SETTLEMENT FOR DEMO
+        if (_request.tokenOut != address(0)) {
+             try MockERC20(_request.tokenOut).mint(_request.recipient, _request.minAmountOut) {} catch {}
+        }
+        
+        pendingZaps[zapId] = _request;
+        
+        emit ZapInitiated(
+            zapId,
+            _user,
+            _request.tokenIn,
+            _request.amountIn,
+            _request.destinationChainId
+        );
+        
         _simulateZapCompletion(zapId, _request);
     }
     
@@ -247,6 +315,10 @@ contract LIFIRouter {
     
     function setLifiDiamond(address _diamond) external onlyOwner {
         lifiDiamond = _diamond;
+    }
+
+    function setYellowAdapter(address _adapter) external onlyOwner {
+        yellowAdapter = _adapter;
     }
     
     function transferOwnership(address _newOwner) external onlyOwner {

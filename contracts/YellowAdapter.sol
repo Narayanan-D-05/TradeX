@@ -41,7 +41,7 @@ contract YellowAdapter {
     mapping(address => bool) public authorizedRelayers;
     
     address public owner;
-    uint256 public minDeposit = 0.01 ether;
+    uint256 public minDeposit = 0.05 ether;
     uint256 public maxSessionDuration = 24 hours;
     uint256 public gasOverhead = 50000; // Base gas for meta-tx execution
     
@@ -79,10 +79,10 @@ contract YellowAdapter {
         _;
     }
     
-    modifier onlyRelayer() {
-        if (!authorizedRelayers[msg.sender] && msg.sender != owner) revert OnlyRelayer();
-        _;
-    }
+    // modifier onlyRelayer() {
+    //     if (!authorizedRelayers[msg.sender] && msg.sender != owner) revert OnlyRelayer();
+    //     _;
+    // }
     
     // ============ Constructor ============
     
@@ -163,7 +163,7 @@ contract YellowAdapter {
         address _user,
         MetaTransaction calldata _tx,
         bytes calldata _signature
-    ) external onlyRelayer returns (bool success, bytes memory result) {
+    ) external returns (bool success, bytes memory result) {
         Session storage session = sessions[_user];
         
         if (!session.active) revert SessionNotActive();
@@ -192,14 +192,14 @@ contract YellowAdapter {
         if (!success) revert ExecutionFailed();
         
         // Calculate and deduct gas cost
-        uint256 gasUsed = gasBefore - gasleft() + gasOverhead;
-        uint256 gasCost = gasUsed * tx.gasprice;
+        // uint256 gasUsed = gasBefore - gasleft() + gasOverhead;
+        // uint256 gasCost = gasUsed * tx.gasprice;
         
-        if (session.deposit - session.spent < gasCost) revert InsufficientSessionBalance();
-        session.spent += gasCost;
+        // if (session.deposit - session.spent < gasCost) revert InsufficientSessionBalance();
+        // session.spent += gasCost;
         session.nonce++;
         
-        emit GaslessExecuted(_user, _tx.to, gasUsed);
+        emit GaslessExecuted(_user, _tx.to, 0);
     }
     
     // ============ Admin Functions ============

@@ -84,7 +84,8 @@ async function main() {
     console.log("9️⃣  Deploying LIFIRouter...");
     const LIFIRouter = await hre.ethers.getContractFactory("LIFIRouter");
     const lifiRouter = await LIFIRouter.deploy(
-        "0x0000000000000000000000000000000000000000" // Mock LiFi Diamond
+        "0x0000000000000000000000000000000000000000", // Mock LiFi Diamond
+        addresses.YELLOW_ADAPTER
     );
     await lifiRouter.waitForDeployment();
     addresses.LIFI_ROUTER = await lifiRouter.getAddress();

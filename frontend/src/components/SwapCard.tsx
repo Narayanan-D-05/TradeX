@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient } from 'wagmi';
-import { parseEther, parseUnits, formatEther } from 'viem';
+import { parseEther, parseUnits, formatEther, encodeFunctionData } from 'viem';
 
 // Contract ABIs
 const TRADEX_ABI = [
@@ -47,6 +47,16 @@ const ERC20_ABI = [
         type: 'function',
         inputs: [{ name: 'account', type: 'address' }],
         outputs: [{ type: 'uint256' }]
+    },
+    {
+        name: 'allowance',
+        type: 'function',
+        inputs: [
+            { name: 'owner', type: 'address' },
+            { name: 'spender', type: 'address' }
+        ],
+        outputs: [{ type: 'uint256' }],
+        stateMutability: 'view'
     }
 ] as const;
 
@@ -77,6 +87,40 @@ const YELLOW_ABI = [
         inputs: [{ name: '_user', type: 'address' }],
         outputs: [{ type: 'uint256' }],
         stateMutability: 'view'
+    },
+    {
+        name: 'executeGasless',
+        type: 'function',
+        inputs: [
+            { name: '_user', type: 'address' },
+            {
+                name: '_tx',
+                type: 'tuple',
+                components: [
+                    { name: 'to', type: 'address' },
+                    { name: 'value', type: 'uint256' },
+                    { name: 'data', type: 'bytes' },
+                    { name: 'nonce', type: 'uint256' },
+                    { name: 'deadline', type: 'uint256' }
+                ]
+            },
+            { name: '_signature', type: 'bytes' }
+        ],
+        outputs: [{ type: 'bool' }, { type: 'bytes' }]
+    },
+    {
+        name: 'sessions',
+        type: 'function',
+        inputs: [{ name: '', type: 'address' }],
+        outputs: [
+            { name: 'user', type: 'address' },
+            { name: 'deposit', type: 'uint256' },
+            { name: 'spent', type: 'uint256' },
+            { name: 'nonce', type: 'uint256' },
+            { name: 'expiry', type: 'uint256' },
+            { name: 'active', type: 'bool' }
+        ],
+        stateMutability: 'view'
     }
 ] as const;
 
@@ -105,16 +149,39 @@ const LIFI_ABI = [
         ],
         outputs: [{ type: 'bytes32' }],
         stateMutability: 'payable'
+    },
+    {
+        name: 'executeZapGasless',
+        type: 'function',
+        inputs: [
+            {
+                name: '_request',
+                type: 'tuple',
+                components: [
+                    { name: 'tokenIn', type: 'address' },
+                    { name: 'tokenOut', type: 'address' },
+                    { name: 'amountIn', type: 'uint256' },
+                    { name: 'minAmountOut', type: 'uint256' },
+                    { name: 'destinationChainId', type: 'uint256' },
+                    { name: 'recipient', type: 'address' },
+                    { name: 'lifiData', type: 'bytes' }
+                ]
+            },
+            { name: '_user', type: 'address' }
+        ],
+        outputs: [{ name: 'zapId', type: 'bytes32' }],
+        stateMutability: 'payable'
     }
 ] as const;
 
 // Contract addresses (newly deployed)
+// Contract addresses (Loaded from Env)
 const CONTRACTS = {
-    TRADEX: '0x51720634A94ba904567a64b701007eAD2Fd6E9Ba' as `0x${string}`,
-    INR_STABLE: '0x228afECAb39932F0A83EfA03DBAd1dc20E954B7f' as `0x${string}`,
-    AED_STABLE: '0x9CE41E2fBCe064734883c7789726Dcc9e358569C' as `0x${string}`,
-    YELLOW_ADAPTER: '0x3fD1c3554C0b1F5f4A16FBb48D8F14D1a1f7B9C5' as `0x${string}`,
-    LIFI_ROUTER: '0x9847abAbD6B8E64c726BB8c4EB2Fc4939E069194' as `0x${string}`,
+    TRADEX: (process.env.NEXT_PUBLIC_TRADEX || '0x011BCCA0Fa806944a74e0E13965412d275E02A08') as `0x${string}`,
+    INR_STABLE: (process.env.NEXT_PUBLIC_INR_STABLE || '0x0F09aD4F62f6C592aDF35eF059a0B16f6Fe13010') as `0x${string}`,
+    AED_STABLE: (process.env.NEXT_PUBLIC_AED_STABLE || '0x5865b9E57643E92DE466a49fA2ab6095A8320d9B') as `0x${string}`,
+    YELLOW_ADAPTER: (process.env.NEXT_PUBLIC_YELLOW_ADAPTER || '0xF23584D7b593Cf4ba12d775C1C3E93C4D5342356') as `0x${string}`,
+    LIFI_ROUTER: (process.env.NEXT_PUBLIC_LIFI_ROUTER || '0x07d28E89C6320D2cdb6f67585cC35EE9fA944667') as `0x${string}`,
 };
 
 interface SwapCardProps {
@@ -132,6 +199,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
     const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
+    const { signTypedDataAsync } = useSignTypedData();
     const publicClient = usePublicClient();
     const { switchChainAsync } = useSwitchChain();
 
@@ -221,7 +289,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 abi: YELLOW_ABI,
                 functionName: 'openSession',
                 args: [BigInt(3600)], // 1 hour session
-                value: parseEther('0.01'), // Match contract minDeposit
+                value: parseEther('0.05'), // Match contract minDeposit
             });
             console.log('Session opened:', hash);
             setStep('idle');
@@ -255,52 +323,152 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             const amountInWei = parseUnits(amount, 18);
             const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
 
-            // Step 1: Approve tokens for LI.FI Router
-            console.log('Approving tokens for LI.FI...');
-            const approveHash = await writeContractAsync({
+            // Pre-validation: Check if user has enough tokens
+            if (tokenBalance && amountInWei > (tokenBalance as bigint)) {
+                setErrorMsg(`Insufficient ${sourceToken} balance. You have ${formatEther(tokenBalance as bigint)} but trying to swap ${amount}.`);
+                setStep('error');
+                return;
+            }
+
+            // Check existing allowance - skip approval if already sufficient
+            const currentAllowance = await publicClient.readContract({
                 address: tokenAddress,
                 abi: ERC20_ABI,
-                functionName: 'approve',
-                args: [CONTRACTS.LIFI_ROUTER, amountInWei],
-                gas: BigInt(50000),
-                maxFeePerGas: BigInt(1000000000),
-                maxPriorityFeePerGas: BigInt(100000000),
-            });
-            console.log('Approval tx:', approveHash);
+                functionName: 'allowance',
+                args: [address, CONTRACTS.LIFI_ROUTER],
+            }) as bigint;
 
-            // Wait for approval confirmation
-            await publicClient.waitForTransactionReceipt({ hash: approveHash });
-            console.log('Approval confirmed');
+            console.log('Current allowance:', currentAllowance.toString());
 
-            // Step 2: Execute cross-chain swap via LI.FI Router
+            if (currentAllowance < amountInWei) {
+                // Need to approve - use exact amount
+                console.log('Approving tokens for LI.FI...');
+                const approveHash = await writeContractAsync({
+                    address: tokenAddress,
+                    abi: ERC20_ABI,
+                    functionName: 'approve',
+                    args: [CONTRACTS.LIFI_ROUTER, amountInWei],
+                });
+                console.log('Approval tx:', approveHash);
+
+                // Wait for approval confirmation
+                await publicClient.waitForTransactionReceipt({
+                    hash: approveHash,
+                    timeout: 120_000,
+                    pollingInterval: 2_000,
+                });
+                console.log('Approval confirmed');
+            } else {
+                console.log('Sufficient allowance exists, skipping approval ⚡');
+            }
+
+            // Step 2: Execute cross-chain swap
             setStep('swapping');
-            console.log('Executing LI.FI cross-chain zap...');
+            console.log('Executing swap...');
 
             let swapHash;
-            if (isFundBroker) {
-                // INR (Sepolia) -> AED (Arc) via LI.FI zapToArc
-                const tokenOut = CONTRACTS.AED_STABLE; // Receiver gets AED
-                swapHash = await writeContractAsync({
-                    address: CONTRACTS.LIFI_ROUTER,
+            const tokenOut = isFundBroker ? CONTRACTS.AED_STABLE : CONTRACTS.INR_STABLE;
+            const destinationChainId = isFundBroker ? 5042002n : 11155111n;
+
+            if (useGasless && hasSession) {
+                // YELLOW GASLESS FLOW
+                console.log("Preparing Gasless Transaction...");
+
+                // 1. Get Nonce
+                const sessionData = await publicClient.readContract({
+                    address: CONTRACTS.YELLOW_ADAPTER,
+                    abi: YELLOW_ABI,
+                    functionName: 'sessions',
+                    args: [address]
+                }) as any; // Cast to any because wagmi return types can be array or object
+
+                // Assuming sessionData is array [user, deposit, spent, nonce, ...] based on ABI order
+                // Need to verify if it returns object or array. Usually array for struct mapping.
+                // Safest to access by index if array, or check structure.
+                // 0n is falsy, so we must use nullish coalescing (??) instead of OR (||)
+                const userNonce = sessionData.nonce ?? sessionData[3];
+                console.log('Session Nonce:', userNonce);
+
+                // 2. Prepare Zap Request
+                const zapRequest = {
+                    tokenIn: tokenAddress,
+                    tokenOut: tokenOut,
+                    amountIn: amountInWei,
+                    minAmountOut: (amountInWei * 97n) / 100n, // 3% slippage
+                    destinationChainId: destinationChainId,
+                    recipient: recipient as `0x${string}`,
+                    lifiData: "0x" as `0x${string}`
+                };
+
+                // 3. Encode Function Call
+                const encodedData = encodeFunctionData({
                     abi: LIFI_ABI,
-                    functionName: 'zapToArc',
-                    args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
-                    gas: BigInt(1000000),
-                    maxFeePerGas: BigInt(2000000000),
-                    maxPriorityFeePerGas: BigInt(100000000),
+                    functionName: 'executeZapGasless',
+                    args: [zapRequest, address]
                 });
+
+                // 4. Create MetaTransaction
+                const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+                const metaTx = {
+                    to: CONTRACTS.LIFI_ROUTER,
+                    value: 0n,
+                    data: encodedData,
+                    nonce: userNonce,
+                    deadline: deadline
+                };
+
+                // 5. Sign Typed Data
+                const signature = await signTypedDataAsync({
+                    domain: {
+                        name: "TradeX Yellow Adapter",
+                        version: "1",
+                        chainId: chainId,
+                        verifyingContract: CONTRACTS.YELLOW_ADAPTER
+                    },
+                    types: {
+                        MetaTransaction: [
+                            { name: 'to', type: 'address' },
+                            { name: 'value', type: 'uint256' },
+                            { name: 'data', type: 'bytes' },
+                            { name: 'nonce', type: 'uint256' },
+                            { name: 'deadline', type: 'uint256' }
+                        ]
+                    },
+                    primaryType: 'MetaTransaction',
+                    message: metaTx
+                });
+
+                console.log("Signature obtained:", signature);
+
+                // 6. Relayer Submission (Simulated by User)
+                // In production, send `metaTx` and `signature` to Relayer API
+                swapHash = await writeContractAsync({
+                    address: CONTRACTS.YELLOW_ADAPTER,
+                    abi: YELLOW_ABI,
+                    functionName: 'executeGasless',
+                    args: [address, metaTx, signature],
+                    gas: BigInt(500000)
+                });
+
             } else {
-                // AED (Arc) -> INR (Sepolia) via LI.FI zapToSepolia
-                const tokenOut = CONTRACTS.INR_STABLE; // Receiver gets INR
-                swapHash = await writeContractAsync({
-                    address: CONTRACTS.LIFI_ROUTER,
-                    abi: LIFI_ABI,
-                    functionName: 'zapToSepolia',
-                    args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
-                    gas: BigInt(1000000),
-                    maxFeePerGas: BigInt(2000000000),
-                    maxPriorityFeePerGas: BigInt(100000000),
-                });
+                // STANDARD GAS FLOW
+                if (isFundBroker) {
+                    swapHash = await writeContractAsync({
+                        address: CONTRACTS.LIFI_ROUTER,
+                        abi: LIFI_ABI,
+                        functionName: 'zapToArc',
+                        args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                        gas: BigInt(500000),
+                    });
+                } else {
+                    swapHash = await writeContractAsync({
+                        address: CONTRACTS.LIFI_ROUTER,
+                        abi: LIFI_ABI,
+                        functionName: 'zapToSepolia',
+                        args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                        gas: BigInt(500000),
+                    });
+                }
             }
 
             console.log('LI.FI Zap tx:', swapHash);
@@ -311,7 +479,18 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         } catch (error: any) {
             console.error('Swap failed:', error);
             setStep('error');
-            setErrorMsg(error.shortMessage || error.message || 'Transaction failed');
+            // Better error message extraction
+            let msg = error.shortMessage || error.message || 'Transaction failed';
+            if (msg.includes('UnsupportedToken')) {
+                msg = 'Token not supported. Please contact support.';
+            } else if (msg.includes('UnsupportedRoute')) {
+                msg = 'Route not available. Please try again later.';
+            } else if (msg.includes('InsufficientAmount')) {
+                msg = 'Amount too low. Please enter a higher amount.';
+            } else if (msg.includes('user rejected')) {
+                msg = 'Transaction was rejected in wallet.';
+            }
+            setErrorMsg(msg);
         }
     };
 
@@ -360,7 +539,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 disabled={step !== 'idle'}
                                 className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300"
                             >
-                                Open Session (0.01 ETH)
+                                Open Session (0.05 ETH)
                             </button>
                         )}
                     </div>
@@ -580,7 +759,11 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                         args: [],
                                     });
                                     console.log('Mint tx:', hash);
-                                    await publicClient.waitForTransactionReceipt({ hash });
+                                    await publicClient.waitForTransactionReceipt({
+                                        hash,
+                                        timeout: 120_000,
+                                        pollingInterval: 2_000,
+                                    });
                                     alert("Minted 10000 test tokens successfully!");
                                     refetchBalance();
                                     setStep('idle');
