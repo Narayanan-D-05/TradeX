@@ -14,20 +14,19 @@ export function WalletButton() {
             <div className="relative">
                 <button
                     onClick={() => setShowDropdown(!showDropdown)}
-                    className="wallet-button connected"
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg hover:bg-gray-700 transition"
                 >
-                    <span className="wallet-dot"></span>
-                    {address.slice(0, 6)}...{address.slice(-4)}
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <span className="font-mono text-white">{address.slice(0, 6)}...{address.slice(-4)}</span>
                 </button>
-
                 {showDropdown && (
-                    <div className="wallet-dropdown">
+                    <div className="absolute right-0 mt-2 w-48 bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50 overflow-hidden">
                         <button
                             onClick={() => {
                                 disconnect();
                                 setShowDropdown(false);
                             }}
-                            className="disconnect-btn"
+                            className="w-full text-left px-4 py-3 text-red-400 hover:bg-gray-800 transition font-medium"
                         >
                             Disconnect
                         </button>
@@ -46,7 +45,7 @@ export function WalletButton() {
                 }
             }}
             disabled={isPending}
-            className="wallet-button"
+            className="px-6 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-xl transition shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
         >
             {isPending ? 'Connecting...' : '🦊 Connect MetaMask'}
         </button>

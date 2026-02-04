@@ -368,7 +368,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
             let swapHash;
             const tokenOut = isFundBroker ? CONTRACTS.AED_STABLE : CONTRACTS.INR_STABLE;
-            const destinationChainId = isFundBroker ? 5042002n : 11155111n;
+            const destinationChainId = isFundBroker ? BigInt(5042002) : BigInt(11155111);
 
             if (useGasless && hasSession) {
                 // YELLOW GASLESS FLOW
@@ -394,7 +394,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                     tokenIn: tokenAddress,
                     tokenOut: tokenOut,
                     amountIn: amountInWei,
-                    minAmountOut: (amountInWei * 97n) / 100n, // 3% slippage
+                    minAmountOut: (amountInWei * BigInt(97)) / BigInt(100), // 3% slippage
                     destinationChainId: destinationChainId,
                     recipient: recipient as `0x${string}`,
                     lifiData: "0x" as `0x${string}`
@@ -411,7 +411,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
                 const metaTx = {
                     to: CONTRACTS.LIFI_ROUTER,
-                    value: 0n,
+                    value: BigInt(0),
                     data: encodedData,
                     nonce: userNonce,
                     deadline: deadline
@@ -792,3 +792,4 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         </div >
     );
 }
+
