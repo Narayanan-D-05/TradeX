@@ -18,7 +18,7 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen grid-bg">
       <Header />
 
       {/* Hero Section */}
@@ -77,8 +77,8 @@ export default function Home() {
                 <button
                   onClick={() => setActiveTab('fundBroker')}
                   className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'fundBroker'
-                      ? 'bg-indigo-500 text-white'
-                      : 'text-gray-400 hover:text-white'
+                    ? 'bg-indigo-500 text-white'
+                    : 'text-gray-400 hover:text-white'
                     }`}
                 >
                   🏦 Fund Broker
@@ -86,8 +86,8 @@ export default function Home() {
                 <button
                   onClick={() => setActiveTab('sendHome')}
                   className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'sendHome'
-                      ? 'bg-indigo-500 text-white'
-                      : 'text-gray-400 hover:text-white'
+                    ? 'bg-indigo-500 text-white'
+                    : 'text-gray-400 hover:text-white'
                     }`}
                 >
                   🏠 Send Home
