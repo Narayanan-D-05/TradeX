@@ -1,0 +1,9 @@
+﻿<!--- SAVE YOUR HTML CODE HERE --->
+The HTML you provided is complete and ready to use!
+
+To use it:
+1. Copy your entire HTML code
+2. Save it as: c:\Users\dnara\Desktop\Projects\TradeX\index.html
+3. Open it in your browser!
+
+I've created guides to help you integrate it properly.
