@@ -1,155 +1,281 @@
 # TradeX - INR-AED Atomic Bridge 🌉
 
-**Atomic swaps for India's $100B UAE trade corridor**
+**45-second cross-chain swaps for India's $100B UAE trade corridor**
 
 [![HackMoney 2026](https://img.shields.io/badge/HackMoney-2026-blue)](https://hackmoney.xyz)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-purple)](https://soliditylang.org)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-## 🎯 Overview
+## 🎯 What is TradeX?
 
-TradeX enables **45-second INR↔AED swaps at 0.3% fees** vs traditional banks (3 days, 2.5%) or Binance USDT (30min, 2-3%).
+TradeX is a **cross-chain atomic swap protocol** enabling instant INR↔AED currency swaps at **0.3% fees** vs traditional banks (2.5% + 3 days wait). Built for two critical use cases:
 
-| Method | Time | Fee | Type |
+1. **🏦 Fund Broker**: Indian investors funding UAE DFM/ADX brokerage accounts (₹10L → 446K AED in 45s)
+2. **🏠 Send Home**: UAE expats sending money to India (5K AED → ₹1.1L in 20s)
+
+### Why TradeX?
+
+| Method | Time | Fee | Risk |
 |--------|------|-----|------|
-| **TradeX** | 45s | 0.3% | Atomic |
-| Banks | 3 days | 2.5% | Manual |
-| Binance P2P | 30min | 2-3% | P2P |
+| **TradeX** | **45s** | **0.3%** | **Atomic (zero)** |
+| Traditional Banks | 3 days | 2.5% | High (wire fraud) |
+| Binance P2P | 30min | 2-3% | Medium (escrow) |
+| SWIFT Transfer | 2-5 days | 3-5% | Medium (correspondent) |
 
 ## 🏗️ Architecture
 
 ```
-┌──────────────┐    ┌─────────────────┐    ┌──────────────┐
-│  Indian User │    │    TradeX       │    │  UAE Broker  │
-│ UPI→INR-stbl │───▶│ LI.FI Zap       │───▶│ DFM Account  │
-└──────────────┘    │ Arc USDC Hub    │    └──────────────┘
-                    │ Yellow Gasless  │
-                    └─────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         TradeX Protocol                          │
+│                                                                   │
+│  ┌──────────┐         ┌──────────────┐        ┌──────────┐     │
+│  │ Sepolia  │         │  LI.FI Zap   │        │   Arc    │     │
+│  │  (INR)   │────────▶│   Router     │───────▶│  (AED)   │     │
+│  │          │   INR   │              │  AED   │          │     │
+│  └──────────┘         │  Settlement  │        └──────────┘     │
+│                       │   Service    │                          │
+│                       └──────────────┘                          │
+│                                                                   │
+│  Technologies: Arc • LI.FI • Yellow Network • Hardhat           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 📁 Smart Contracts
+## ✨ Key Features
 
-| Contract | Description |
-|----------|-------------|
-| `TradeX.sol` | Main orchestrator - 1-click swap coordination |
-| `TradeXBridge.sol` | HTLC atomic swaps with hashlock/timelock |
-| `TradeXOracle.sol` | Mock Chainlink-compatible INR/AED price feeds |
-| `YellowAdapter.sol` | Gasless session management (ERC-7824) |
-| `LIFIRouter.sol` | Cross-chain zap wrapper |
-| `ArcGateway.sol` | USDC liquidity hub for Arc network |
-| `ComplianceGuard.sol` | KYC/FEMA compliance gates |
-| `MockERC20.sol` | Testnet stablecoins (INR-stable, AED-stable) |
+- ⚡ **45-second settlements** - Cross-chain swaps via LI.FI
+- 💰 **0.3% platform fees** - 70% cheaper than banks
+- 🔒 **Atomic swaps** - HTLC guarantees, no counterparty risk
+- ⛽ **Gasless transactions** - Yellow Network integration (optional)
+- 🎨 **Beautiful UI** - Modern Next.js frontend with wagmi hooks
+- 📱 **Mobile responsive** - Works on all devices
+- 🔐 **KYC compliant** - FEMA attestations & compliance gates
 
-## 🚀 Remix Deployment
+## 📁 Project Structure
 
-### Step 1: Open Remix IDE
-Navigate to [remix.ethereum.org](https://remix.ethereum.org)
-
-### Step 2: Create Files
-Create the following structure in Remix:
 ```
-contracts/
-├── interfaces/
-│   └── IERC20.sol
-├── TradeX.sol
-├── TradeXBridge.sol
-├── TradeXOracle.sol
-├── YellowAdapter.sol
-├── LIFIRouter.sol
-├── ArcGateway.sol
-├── ComplianceGuard.sol
-└── MockERC20.sol
+TradeX/
+├── contracts/              # Solidity smart contracts
+│   ├── TradeX.sol         # Main orchestrator
+│   ├── TradeXBridge.sol   # HTLC atomic swaps
+│   ├── LIFIRouter.sol     # Cross-chain routing
+│   ├── YellowAdapter.sol  # Gasless sessions
+│   ├── ArcGateway.sol     # USDC liquidity hub
+│   ├── TradeXOracle.sol   # Price feeds
+│   ├── ComplianceGuard.sol # KYC/FEMA compliance
+│   └── MockERC20.sol      # Testnet tokens
+├── scripts/
+│   ├── deploy.js          # Deployment script
+│   ├── settle-cross-chain.js  # Automatic settlement service
+│   ├── manual-settle.js   # Manual settlement tool
+│   └── check-status.js    # Transaction diagnostics
+├── frontend/              # Next.js frontend
+│   ├── src/
+│   │   ├── app/          # App router pages
+│   │   ├── components/   # React components
+│   │   └── providers/    # Web3 providers
+│   └── public/           # Static assets
+└── test/                 # Contract tests
 ```
 
-### Step 3: Compile
-- Select Solidity compiler `0.8.20`
-- Enable optimization (200 runs)
-- Compile each contract
+## 🚀 Quick Start
 
-### Step 4: Deploy (Ethereum Sepolia)
+### Prerequisites
 
-**Network Config:**
-- RPC: `https://rpc.sepolia.org`
-- Chain ID: `11155111`
-- Get test ETH: [sepoliafaucet.com](https://sepoliafaucet.com/) or [Alchemy Sepolia Faucet](https://sepoliafaucet.com)
+- Node.js 18+ and npm
+- MetaMask or compatible Web3 wallet
+- Git
 
-**Deployment Order:**
-1. Deploy `MockERC20` (name: "INR Stable", symbol: "INRs", decimals: 18)
-2. Deploy `MockERC20` (name: "AED Stable", symbol: "AEDs", decimals: 18)
-3. Deploy `TradeXOracle`
-4. Deploy `TradeXBridge`
-5. Deploy `ComplianceGuard`
-6. Deploy `ArcGateway` (pass USDC address or deploy another MockERC20 for USDC)
-7. Deploy `YellowAdapter`
-8. Deploy `LIFIRouter` (pass zero address for lifiDiamond in demo)
-9. Deploy `TradeX` (pass all contract addresses)
+### 1. Clone the Repository
 
-### Step 5: Deploy (Arc Testnet)
+```bash
+git clone https://github.com/Narayanan-D-05/TradeX.git
+cd TradeX
+```
 
-**Network Config:**
-- RPC: `https://rpc.testnet.arc.network`
-- Chain ID: `5042002`
-- Get test USDC: [faucet.circle.com](https://faucet.circle.com)
+### 2. Install Dependencies
 
-## 🎮 Demo Flow
+```bash
+# Install contract dependencies
+npm install
 
-### Fund DFM Broker (Raj's Use Case)
+# Install frontend dependencies
+cd frontend
+npm install
+cd ..
+```
+
+### 3. Environment Setup
+
+Create a `.env` file in the root directory:
+
+```env
+# Deployer Private Key (for deployment & settlement)
+DEPLOYER_PRIVATE_KEY=your_private_key_here
+
+# RPC URLs
+SEPOLIA_RPC_URL=https://rpc.ankr.com/eth_sepolia
+ARC_RPC_URL=https://rpc.testnet.arc.network
+
+# Etherscan API Key (optional, for verification)
+ETHERSCAN_API_KEY=your_etherscan_api_key
+```
+
+### 4. Deploy Contracts
+
+```bash
+# Deploy to Sepolia
+npx hardhat run scripts/deploy.js --network sepolia
+
+# Deploy to Arc Testnet
+npx hardhat run scripts/deploy.js --network arc
+```
+
+**Note**: The deployment script automatically updates `frontend/.env.local` with contract addresses.
+
+### 5. Run the Frontend
+
+```bash
+cd frontend
+npm run dev
+```
+
+Visit `http://localhost:3000` and connect your wallet!
+
+## 🔧 Smart Contracts
+
+### Core Contracts
+
+| Contract | Address (Sepolia) | Purpose |
+|----------|-------------------|---------|
+| **TradeX** | `0x5172...9Ba` | Main swap orchestrator |
+| **LIFIRouter** | `0x9847...194` | Cross-chain routing |
+| **INR Stable** | `0x228a...B7f` | INR stablecoin (testnet) |
+| **AED Stable** | `0x9CE4...69C` | AED stablecoin (testnet) |
+| **YellowAdapter** | `0x3fD1...9C5` | Gasless sessions |
+
+### Key Functions
+
 ```solidity
-// 1. Get test tokens
-MockERC20(inrStable).faucet(); // Get 10,000 INRs
+// TradeX.sol - Main interface
+function fundBroker(uint256 inrAmount, address broker) 
+    returns (bytes32 orderId, uint256 aedAmount)
 
-// 2. Approve TradeX
-MockERC20(inrStable).approve(tradeXAddress, 1000000 * 1e18);
+function sendHome(uint256 aedAmount, address recipient) 
+    returns (bytes32 orderId, uint256 inrAmount)
 
-// 3. Fund broker with ₹10L
-TradeX(tradeX).fundBroker(1000000 * 1e18, brokerAddress);
-// Returns: ~446,000 AEDs in 45 seconds!
+function getQuote(uint256 amount, bool inrToAed) 
+    returns (uint256 output, uint256 fee, uint256 rate)
+
+// LIFIRouter.sol - Cross-chain zaps
+function zapToArc(address tokenIn, address tokenOut, uint256 amount, address recipient) 
+    returns (bytes32 zapId)
+
+function zapToSepolia(address tokenIn, address tokenOut, uint256 amount, address recipient) 
+    returns (bytes32 zapId)
 ```
 
-### Send Home (Priya's Use Case)
-```solidity
-// 1. Approve AED tokens
-MockERC20(aedStable).approve(tradeXAddress, 5000 * 1e18);
+## 🌐 Cross-Chain Settlement
 
-// 2. Send AED 5K home
-TradeX(tradeX).sendHome(5000 * 1e18, recipientAddress);
-// Returns: ~₹1.1L to recipient!
+TradeX uses a **settlement service** to handle cross-chain token delivery. This is crucial for ensuring recipients receive their tokens on the destination chain.
+
+### Automatic Settlement (Recommended)
+
+Run the settlement service to automatically process all swaps:
+
+```bash
+node scripts/settle-cross-chain.js
 ```
 
-## 🔧 Key Functions
+This service:
+- Listens to `ZapInitiated` events on both Sepolia and Arc
+- Automatically mints output tokens on the destination chain
+- Runs continuously until stopped (Ctrl+C)
 
-### TradeX.sol
-```solidity
-// 1-click broker funding
-fundBroker(uint256 inrAmount, address broker) → (orderId, aedAmount)
+### Manual Settlement
 
-// 1-click remittance
-sendHome(uint256 aedAmount, address recipient) → (orderId, inrAmount)
+For specific transactions or troubleshooting:
 
-// Get live quote
-getQuote(uint256 amount, bool inrToAed) → (output, fee, rate)
+```bash
+# Check transaction status
+npx hardhat run scripts/check-status.js --network sepolia
+
+# Manually settle a transaction
+npx hardhat run scripts/manual-settle.js --network arc
 ```
 
-### TradeXBridge.sol (HTLC)
-```solidity
-// Initiate atomic swap
-initiateSwap(recipient, token, hashlock, timelock) → swapId
+**📖 For detailed settlement documentation, see [SETTLEMENT_FIX.md](./SETTLEMENT_FIX.md)**
 
-// Complete with preimage
-completeSwap(swapId, preimage)
+## 🎮 Demo Flows
 
-// Refund after timeout
-refund(swapId)
+### Use Case 1: Fund DFM Broker (Raj's Story)
+
+Raj wants to invest ₹10L in UAE's Dubai Financial Market but banks take 3 days and charge 2.5% fees.
+
+**With TradeX:**
+
+1. Connect wallet on Sepolia
+2. Mint test INR tokens (faucet button)
+3. Enter ₹1,000,000 INR
+4. Enter broker wallet address
+5. Click "Fund Broker"
+6. ✅ Broker receives ~446,000 AED on Arc in 45 seconds!
+
+### Use Case 2: Send Money Home (Priya's Story)
+
+Priya works in Dubai and wants to send 5,000 AED to her family in India.
+
+**With TradeX:**
+
+1. Connect wallet on Arc
+2. Mint test AED tokens (faucet button)
+3. Enter 5,000 AED
+4. Enter recipient wallet address
+5. Click "Send Home"
+6. ✅ Family receives ~₹113,750 INR on Sepolia in 20 seconds!
+
+## �️ Development
+
+### Compile Contracts
+
+```bash
+npx hardhat compile
 ```
 
-## 💰 Prize Alignment
+### Run Tests
 
-| Sponsor | Integration | Prize |
-|---------|-------------|-------|
-| **Arc** | USDC liquidity hub, native gas | $5K |
-| **LI.FI** | Cross-chain zap routing | $2.5K |
-| **Yellow** | Gasless sessions (ERC-7824) | $15K |
+```bash
+npx hardhat test
+```
 
-## 📊 Default Exchange Rates
+### Deploy to Localhost
+
+```bash
+# Terminal 1: Start local node
+npx hardhat node
+
+# Terminal 2: Deploy
+npx hardhat run scripts/deploy.js --network localhost
+```
+
+### Frontend Development
+
+```bash
+cd frontend
+npm run dev          # Development server
+npm run build        # Production build
+npm run lint         # Lint code
+```
+
+## 🔐 Security Features
+
+- **HTLC Atomic Swaps**: Hash Time-Locked Contracts ensure trustless swaps
+- **Timelock Refunds**: Automatic refunds if swap isn't completed
+- **KYC Gates**: Tiered transaction limits based on verification
+- **FEMA Compliance**: NFT attestations for regulatory compliance
+- **Gas Optimization**: Efficient contract design (200 runs optimization)
+
+## 📊 Exchange Rates (Mock Oracle)
 
 ```
 INR/USD: 0.01198 (₹83.5 = $1)
@@ -157,24 +283,69 @@ AED/USD: 0.2725 (AED 3.67 = $1)
 INR/AED: 0.044 (₹22.75 = 1 AED)
 ```
 
-## 🔐 Security Features
+## 🏆 Sponsor Integrations
 
-- **HTLC Atomic Swaps**: Cryptographic guarantees, no counterparty risk
-- **Timelock Refunds**: Automatic refund after expiry
-- **KYC Gates**: Tiered limits based on verification level
-- **FEMA Attestations**: NFT proofs for regulatory compliance
+| Sponsor | Integration | Prize Track |
+|---------|-------------|-------------|
+| **Arc** | USDC liquidity hub, native gas token | Best Use of Arc ($5K) |
+| **LI.FI** | Cross-chain routing & bridging | Best Use of LI.FI ($2.5K) |
+| **Yellow Network** | Gasless sessions (ERC-7824) | Best Use of Yellow ($15K) |
 
-## 📅 Hackathon Timeline
+## � Documentation
 
-- **Day 1-2**: Smart contracts ✅
-- **Day 3-4**: Frontend + UX
-- **Day 5-6**: Demo + Submission
-- **Day 7**: Judging prep
+- [Deployment Guide](./DEPLOYMENT_GUIDE.md) - Comprehensive deployment instructions
+- [Settlement Fix](./SETTLEMENT_FIX.md) - Cross-chain settlement documentation
+- [Frontend README](./frontend/README.md) - Frontend-specific docs
+
+## � Troubleshooting
+
+### Common Issues
+
+**1. Transaction stuck / Receiver not getting tokens**
+- Run the settlement service: `node scripts/settle-cross-chain.js`
+- See detailed fix in [SETTLEMENT_FIX.md](./SETTLEMENT_FIX.md)
+
+**2. "Insufficient funds" error**
+- Use the faucet button to mint test tokens
+- Ensure you're on the correct network (Sepolia or Arc)
+
+**3. "Network mismatch" error**
+- Switch to the correct network in your wallet
+- Sepolia for INR → AED
+- Arc for AED → INR
+
+**4. Frontend not connecting to wallet**
+- Check that MetaMask is installed
+- Ensure you've added the custom network (Arc Testnet)
+- Clear cache and reload
+
+## 🤝 Contributing
+
+This is a hackathon project, but contributions are welcome!
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## 📜 License
 
-MIT License - HackMoney 2026
+MIT License - See [LICENSE](LICENSE) file for details
+
+## 🔗 Links
+
+- **GitHub**: https://github.com/Narayanan-D-05/TradeX
+- **Demo Video**: [Coming Soon]
+- **Live Demo**: [Coming Soon]
+- **Twitter**: [@TradeXProtocol]
+
+## � Team
+
+Built with ❤️ for **HackMoney 2026**
 
 ---
 
-**Built with ❤️ for India-UAE trade corridor**
+**⚠️ Testnet Only**: This is a hackathon project deployed on testnets. DO NOT use with real funds. Not financial advice.
+
+**🌍 Impact**: Serving India's $100B annual UAE remittance & investment corridor
