@@ -1,0 +1,28 @@
+{
+  "name": "tradex",
+  "version": "1.0.0",
+  "description": "INR-AED Atomic Bridge",
+  "main": "index.js",
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "deploy:sepolia": "npx hardhat run scripts/deploy.js --network sepolia",
+    "deploy:local": "npx hardhat run scripts/deploy.js --network localhost",
+    "test": "npx hardhat test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Narayanan-D-05/TradeX.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Narayanan-D-05/TradeX/issues"
+  },
+  "homepage": "https://github.com/Narayanan-D-05/TradeX#readme",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.28.4"
+  }
+}

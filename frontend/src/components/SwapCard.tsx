@@ -1,0 +1,490 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useAccount, useWriteContract, useReadContract, useSignTypedData } from 'wagmi';
+import { parseEther, parseUnits, formatEther } from 'viem';
+
+// Contract ABIs
+const TRADEX_ABI = [
+    {
+        name: 'fundBroker',
+        type: 'function',
+        inputs: [
+            { name: '_inrAmount', type: 'uint256' },
+            { name: '_brokerAddress', type: 'address' }
+        ],
+        outputs: [
+            { name: 'orderId', type: 'bytes32' },
+            { name: 'aedAmount', type: 'uint256' }
+        ]
+    },
+    {
+        name: 'sendHome',
+        type: 'function',
+        inputs: [
+            { name: '_aedAmount', type: 'uint256' },
+            { name: '_recipient', type: 'address' }
+        ],
+        outputs: [
+            { name: 'orderId', type: 'bytes32' },
+            { name: 'inrAmount', type: 'uint256' }
+        ]
+    }
+] as const;
+
+const ERC20_ABI = [
+    {
+        name: 'approve',
+        type: 'function',
+        inputs: [
+            { name: 'spender', type: 'address' },
+            { name: 'amount', type: 'uint256' }
+        ],
+        outputs: [{ type: 'bool' }]
+    },
+    {
+        name: 'balanceOf',
+        type: 'function',
+        inputs: [{ name: 'account', type: 'address' }],
+        outputs: [{ type: 'uint256' }]
+    }
+] as const;
+
+const YELLOW_ABI = [
+    {
+        name: 'openSession',
+        type: 'function',
+        inputs: [{ name: '_duration', type: 'uint256' }],
+        outputs: [],
+        stateMutability: 'payable'
+    },
+    {
+        name: 'closeSession',
+        type: 'function',
+        inputs: [],
+        outputs: []
+    },
+    {
+        name: 'isSessionActive',
+        type: 'function',
+        inputs: [{ name: '_user', type: 'address' }],
+        outputs: [{ type: 'bool' }],
+        stateMutability: 'view'
+    },
+    {
+        name: 'getSessionBalance',
+        type: 'function',
+        inputs: [{ name: '_user', type: 'address' }],
+        outputs: [{ type: 'uint256' }],
+        stateMutability: 'view'
+    }
+] as const;
+
+// LI.FI Router ABI for cross-chain zaps
+const LIFI_ABI = [
+    {
+        name: 'zapToArc',
+        type: 'function',
+        inputs: [
+            { name: '_tokenIn', type: 'address' },
+            { name: '_amount', type: 'uint256' },
+            { name: '_recipient', type: 'address' }
+        ],
+        outputs: [{ type: 'bytes32' }],
+        stateMutability: 'payable'
+    },
+    {
+        name: 'zapToSepolia',
+        type: 'function',
+        inputs: [
+            { name: '_tokenIn', type: 'address' },
+            { name: '_amount', type: 'uint256' },
+            { name: '_recipient', type: 'address' }
+        ],
+        outputs: [{ type: 'bytes32' }],
+        stateMutability: 'payable'
+    }
+] as const;
+
+// Contract addresses from environment
+const CONTRACTS = {
+    TRADEX: process.env.NEXT_PUBLIC_TRADEX as `0x${string}`,
+    INR_STABLE: process.env.NEXT_PUBLIC_INR_STABLE as `0x${string}`,
+    AED_STABLE: process.env.NEXT_PUBLIC_AED_STABLE as `0x${string}`,
+    YELLOW_ADAPTER: process.env.NEXT_PUBLIC_YELLOW_ADAPTER as `0x${string}`,
+    LIFI_ROUTER: process.env.NEXT_PUBLIC_LIFI_ROUTER as `0x${string}`,
+};
+
+interface SwapCardProps {
+    mode: 'fundBroker' | 'sendHome';
+    onSwap?: (amount: string, recipient: string) => void;
+}
+
+export function SwapCard({ mode, onSwap }: SwapCardProps) {
+    const [amount, setAmount] = useState('');
+    const [recipient, setRecipient] = useState('');
+    const [step, setStep] = useState<'idle' | 'opening-session' | 'approving' | 'swapping' | 'success' | 'error'>('idle');
+    const [txHash, setTxHash] = useState<string | null>(null);
+    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [useGasless, setUseGasless] = useState(true);
+
+    const { address, isConnected } = useAccount();
+    const { writeContractAsync } = useWriteContract();
+
+    // Check if user has active Yellow session
+    const { data: hasSession } = useReadContract({
+        address: CONTRACTS.YELLOW_ADAPTER,
+        abi: YELLOW_ABI,
+        functionName: 'isSessionActive',
+        args: address ? [address] : undefined,
+    });
+
+    const { data: sessionBalance } = useReadContract({
+        address: CONTRACTS.YELLOW_ADAPTER,
+        abi: YELLOW_ABI,
+        functionName: 'getSessionBalance',
+        args: address ? [address] : undefined,
+    });
+
+    // Mock exchange rates (from TradeXOracle)
+    const INR_TO_AED_RATE = 0.044;
+    const AED_TO_INR_RATE = 22.75;
+    const PLATFORM_FEE = 0.003;
+
+    const isFundBroker = mode === 'fundBroker';
+
+    const sourceToken = isFundBroker ? 'INR' : 'AED';
+    const destToken = isFundBroker ? 'AED' : 'INR';
+    const sourceNetwork = isFundBroker ? 'Ethereum Sepolia' : 'Arc Testnet';
+    const destNetwork = isFundBroker ? 'Arc Testnet' : 'Ethereum Sepolia';
+
+    const calculateOutput = () => {
+        if (!amount || isNaN(parseFloat(amount))) return '0';
+        const inputAmount = parseFloat(amount);
+        const rate = isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE;
+        const grossOutput = inputAmount * rate;
+        const fee = grossOutput * PLATFORM_FEE;
+        return (grossOutput - fee).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    };
+
+    const calculateFee = () => {
+        if (!amount || isNaN(parseFloat(amount))) return '0';
+        const inputAmount = parseFloat(amount);
+        const rate = isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE;
+        const grossOutput = inputAmount * rate;
+        return (grossOutput * PLATFORM_FEE).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    };
+
+    const openYellowSession = async () => {
+        if (!isConnected) return;
+
+        setStep('opening-session');
+        try {
+            // Open session with 0.005 ETH deposit for ~10 gasless transactions
+            const hash = await writeContractAsync({
+                address: CONTRACTS.YELLOW_ADAPTER,
+                abi: YELLOW_ABI,
+                functionName: 'openSession',
+                args: [BigInt(3600)], // 1 hour session
+                value: parseEther('0.005'), // Small deposit
+            });
+            console.log('Session opened:', hash);
+            setStep('idle');
+        } catch (error: any) {
+            console.error('Failed to open session:', error);
+            setErrorMsg('Failed to open gasless session');
+            setStep('error');
+        }
+    };
+
+    const handleSwap = async () => {
+        if (!amount || !recipient || !isConnected || !address) return;
+
+        setStep('approving');
+        setErrorMsg(null);
+        setTxHash(null);
+
+        try {
+            const amountInWei = parseUnits(amount, 18);
+            const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
+
+            // Step 1: Approve tokens for LI.FI Router
+            console.log('Approving tokens for LI.FI...');
+            const approveHash = await writeContractAsync({
+                address: tokenAddress,
+                abi: ERC20_ABI,
+                functionName: 'approve',
+                args: [CONTRACTS.LIFI_ROUTER, amountInWei],
+                gas: BigInt(50000),
+                maxFeePerGas: BigInt(1000000000),
+                maxPriorityFeePerGas: BigInt(100000000),
+            });
+            console.log('Approval tx:', approveHash);
+
+            // Step 2: Execute cross-chain swap via LI.FI Router
+            setStep('swapping');
+            console.log('Executing LI.FI cross-chain zap...');
+
+            let swapHash;
+            if (isFundBroker) {
+                // INR (Sepolia) -> AED (Arc) via LI.FI zapToArc
+                swapHash = await writeContractAsync({
+                    address: CONTRACTS.LIFI_ROUTER,
+                    abi: LIFI_ABI,
+                    functionName: 'zapToArc',
+                    args: [tokenAddress, amountInWei, recipient as `0x${string}`],
+                    gas: BigInt(200000),
+                    maxFeePerGas: BigInt(1000000000),
+                    maxPriorityFeePerGas: BigInt(100000000),
+                });
+            } else {
+                // AED (Arc) -> INR (Sepolia) via LI.FI zapToSepolia
+                swapHash = await writeContractAsync({
+                    address: CONTRACTS.LIFI_ROUTER,
+                    abi: LIFI_ABI,
+                    functionName: 'zapToSepolia',
+                    args: [tokenAddress, amountInWei, recipient as `0x${string}`],
+                    gas: BigInt(200000),
+                    maxFeePerGas: BigInt(1000000000),
+                    maxPriorityFeePerGas: BigInt(100000000),
+                });
+            }
+
+            console.log('LI.FI Zap tx:', swapHash);
+            setTxHash(swapHash);
+            setStep('success');
+            onSwap?.(amount, recipient);
+
+        } catch (error: any) {
+            console.error('Swap failed:', error);
+            setStep('error');
+            setErrorMsg(error.message || 'Transaction failed');
+        }
+    };
+
+    const resetState = () => {
+        setStep('idle');
+        setAmount('');
+        setRecipient('');
+        setTxHash(null);
+        setErrorMsg(null);
+    };
+
+    return (
+        <div className="glass-card p-6 w-full max-w-md">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold">
+                    {isFundBroker ? '🏦 Fund DFM Broker' : '🏠 Send Home'}
+                </h2>
+                <div className={`network-badge ${isFundBroker ? 'mumbai' : 'arc'}`}>
+                    <span className="w-2 h-2 rounded-full bg-current pulse-glow" />
+                    {sourceNetwork}
+                </div>
+            </div>
+
+            {/* Yellow Session Status */}
+            {useGasless && isConnected && (
+                <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                            <span className="text-yellow-400">⚡</span>
+                            <span className="text-sm text-yellow-200">Yellow Gasless</span>
+                        </div>
+                        {hasSession ? (
+                            <span className="text-xs text-emerald-400">
+                                Session Active • {sessionBalance ? formatEther(sessionBalance as bigint) : '0'} ETH
+                            </span>
+                        ) : (
+                            <button
+                                onClick={openYellowSession}
+                                disabled={step !== 'idle'}
+                                className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300"
+                            >
+                                Open Session (0.005 ETH)
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Success State */}
+            {step === 'success' && (
+                <div className="mb-6 p-4 bg-emerald-500/20 border border-emerald-500/50 rounded-lg">
+                    <div className="flex items-center gap-2 text-emerald-400 mb-2">
+                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                        </svg>
+                        <span className="font-bold">Transaction Successful!</span>
+                    </div>
+                    {txHash && (
+                        <a
+                            href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-indigo-400 hover:underline break-all"
+                        >
+                            View on Etherscan →
+                        </a>
+                    )}
+                    <button onClick={resetState} className="mt-4 btn-primary w-full">
+                        Make Another Swap
+                    </button>
+                </div>
+            )}
+
+            {/* Error State */}
+            {step === 'error' && (
+                <div className="mb-6 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
+                    <div className="flex items-center gap-2 text-red-400 mb-2">
+                        <span className="font-bold">❌ Transaction Failed</span>
+                    </div>
+                    <p className="text-sm text-gray-300">{errorMsg}</p>
+                    <button onClick={resetState} className="mt-4 btn-primary w-full">
+                        Try Again
+                    </button>
+                </div>
+            )}
+
+            {/* Form */}
+            {step !== 'success' && step !== 'error' && (
+                <>
+                    {/* From Input */}
+                    <div className="mb-4">
+                        <label className="block text-sm text-gray-400 mb-2">You Send</label>
+                        <div className="relative">
+                            <input
+                                type="number"
+                                value={amount}
+                                onChange={(e) => setAmount(e.target.value)}
+                                placeholder="0.00"
+                                className="input-field pr-20 text-2xl font-semibold"
+                                disabled={step !== 'idle'}
+                            />
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                <span className="text-lg font-medium text-gray-300">{sourceToken}</span>
+                                <span className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs">
+                                    {isFundBroker ? '₹' : 'د'}
+                                </span>
+                            </div>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                            Network: {sourceNetwork}
+                        </p>
+                    </div>
+
+                    {/* Swap Direction Indicator */}
+                    <div className="flex justify-center my-4">
+                        <div className="w-10 h-10 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center swap-icon">
+                            <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                            </svg>
+                        </div>
+                    </div>
+
+                    {/* To Output */}
+                    <div className="mb-4">
+                        <label className="block text-sm text-gray-400 mb-2">Recipient Gets</label>
+                        <div className="relative">
+                            <div className="input-field pr-20 text-2xl font-semibold bg-gray-900/50">
+                                {calculateOutput()}
+                            </div>
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                <span className="text-lg font-medium text-gray-300">{destToken}</span>
+                                <span className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs">
+                                    {isFundBroker ? 'د' : '₹'}
+                                </span>
+                            </div>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">
+                            Network: {destNetwork}
+                        </p>
+                    </div>
+
+                    {/* Recipient Address */}
+                    <div className="mb-6">
+                        <label className="block text-sm text-gray-400 mb-2">
+                            {isFundBroker ? 'Broker Wallet Address' : 'Recipient Wallet Address'}
+                        </label>
+                        <input
+                            type="text"
+                            value={recipient}
+                            onChange={(e) => setRecipient(e.target.value)}
+                            placeholder="0x..."
+                            className="input-field font-mono text-sm"
+                            disabled={step !== 'idle'}
+                        />
+                    </div>
+
+                    {/* Fee Breakdown */}
+                    <div className="bg-gray-900/50 rounded-lg p-4 mb-6 space-y-2">
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Exchange Rate</span>
+                            <span className="text-white">
+                                1 {sourceToken} = {isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE} {destToken}
+                            </span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Platform Fee (0.3%)</span>
+                            <span className="text-amber-400">{calculateFee()} {destToken}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Network Fee</span>
+                            <span className={hasSession ? "text-emerald-400" : "text-gray-400"}>
+                                {hasSession ? '⚡ Gasless' : '~0.0002 ETH'}
+                            </span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Estimated Time</span>
+                            <span className="text-emerald-400">~45 seconds</span>
+                        </div>
+                        <div className="border-t border-gray-700 pt-2 mt-2">
+                            <div className="flex justify-between font-semibold">
+                                <span className="text-gray-300">You Save vs Banks</span>
+                                <span className="text-emerald-400">~70%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Swap Button */}
+                    <button
+                        onClick={handleSwap}
+                        disabled={!amount || !recipient || step !== 'idle' || !isConnected}
+                        className="btn-primary w-full flex items-center justify-center gap-2 text-lg"
+                    >
+                        {!isConnected ? (
+                            '🔗 Connect Wallet First'
+                        ) : step === 'opening-session' ? (
+                            <>
+                                <span className="spinner" />
+                                Opening Session...
+                            </>
+                        ) : step === 'approving' ? (
+                            <>
+                                <span className="spinner" />
+                                Approving...
+                            </>
+                        ) : step === 'swapping' ? (
+                            <>
+                                <span className="spinner" />
+                                Confirming Swap...
+                            </>
+                        ) : (
+                            <>
+                                {isFundBroker ? '🚀 Fund Broker' : '✈️ Send Home'}
+                            </>
+                        )}
+                    </button>
+                </>
+            )}
+
+            {/* Compliance Badge */}
+            <div className="mt-4 flex items-center justify-center gap-2 text-xs text-gray-500">
+                <svg className="w-4 h-4 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                FEMA Compliant • KYC Verified • Yellow Network
+            </div>
+        </div>
+    );
+}
