@@ -8,14 +8,17 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useAccount, useWalletClient } from 'wagmi';
+import { useAccount, useWalletClient, usePublicClient, useWriteContract } from 'wagmi';
+import { parseUnits, keccak256, encodePacked } from 'viem';
 import {
     YellowNetworkClient,
     createYellowClient,
     YellowSession,
-    YELLOW_CONTRACTS
+    YELLOW_CONTRACTS,
+    CUSTODY_ABI,
+    ERC20_APPROVE_ABI
 } from '@/lib/yellowNetwork';
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 
 interface UseYellowNetworkReturn {
     // State
@@ -24,6 +27,9 @@ interface UseYellowNetworkReturn {
     isReady: boolean;
     isLoading: boolean;
     error: string | null;
+    depositHash: string | null; // On-chain deposit tx hash
+    channelTxHash: string | null; // On-chain channel creation tx hash
+    hasPendingChannel: boolean; // Ready for on-chain submission
 
     // Actions
     connect: () => Promise<void>;
@@ -32,6 +38,9 @@ interface UseYellowNetworkReturn {
     sendPayment: (amount: string, recipient: Address) => Promise<void>;
     closeSession: () => void;
     requestTestTokens: () => Promise<boolean>;
+    depositToChannel: (amount: string) => Promise<string | null>; // Returns tx hash
+    requestChannelCreation: () => Promise<void>; // Request channel via WebSocket
+    createChannelOnChain: () => Promise<string | null>; // Submit to blockchain, returns tx hash
 
     // Info
     sessionId: string | null;
@@ -41,11 +50,14 @@ interface UseYellowNetworkReturn {
 export function useYellowNetwork(): UseYellowNetworkReturn {
     const { address, isConnected: walletConnected } = useAccount();
     const { data: walletClient } = useWalletClient();
+    const publicClient = usePublicClient();
+    const { writeContractAsync } = useWriteContract();
 
     const clientRef = useRef<YellowNetworkClient | null>(null);
     const [session, setSession] = useState<YellowSession>({ state: 'disconnected' });
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [depositHash, setDepositHash] = useState<string | null>(null);
 
     // Initialize client when wallet is connected
     useEffect(() => {
@@ -55,8 +67,8 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
                 clientRef.current.disconnect();
             }
 
-            // Create new client
-            const client = createYellowClient(walletClient, address, true);
+            // Create new client with publicClient for NitroliteClient
+            const client = createYellowClient(walletClient as any, address, publicClient, true);
 
             // Subscribe to session changes
             client.onSessionChange((newSession) => {
@@ -224,9 +236,115 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
         }
     }, []);
 
+    /**
+     * Deposit ETH to Yellow Network Custody Contract (ON-CHAIN!)
+     * This creates a verifiable on-chain transaction
+     * Note: Using ETH deposit for simplicity since Custody Contract ABI is unverified
+     */
+    const depositToChannel = useCallback(async (amountEth: string): Promise<string | null> => {
+        if (!address || !publicClient) {
+            setError('Wallet not connected');
+            return null;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            const amountInWei = parseUnits(amountEth, 18); // ETH has 18 decimals
+
+            // Generate a channel ID from user address + timestamp
+            const channelId = keccak256(
+                encodePacked(['address', 'uint256'], [address, BigInt(Date.now())])
+            ) as Hex;
+
+            console.log('🔒 Depositing ETH to Custody Contract...');
+            console.log('   Amount:', amountEth, 'ETH');
+            console.log('   Channel ID:', channelId);
+            console.log('   Custody:', YELLOW_CONTRACTS.CUSTODY);
+
+            // Deposit ETH directly (no approval needed for ETH)
+            console.log('📝 Depositing ETH to Custody...');
+            const depositTxHash = await writeContractAsync({
+                address: YELLOW_CONTRACTS.CUSTODY,
+                abi: CUSTODY_ABI,
+                functionName: 'depositETH',
+                args: [channelId],
+                value: amountInWei,
+            });
+
+            console.log('⏳ Waiting for deposit confirmation...');
+            await publicClient.waitForTransactionReceipt({ hash: depositTxHash });
+
+            console.log('🎉 ON-CHAIN DEPOSIT CONFIRMED!');
+            console.log('   TX Hash:', depositTxHash);
+            console.log('   View on Etherscan: https://sepolia.etherscan.io/tx/' + depositTxHash);
+
+            // Store the hash for display
+            setDepositHash(depositTxHash);
+
+            // Update session with channelOpenHash
+            setSession(prev => ({
+                ...prev,
+                channelOpenHash: depositTxHash
+            }));
+
+            return depositTxHash;
+        } catch (err: any) {
+            console.error('Deposit failed:', err);
+            setError(err?.message || 'Deposit to Custody failed');
+            return null;
+        } finally {
+            setIsLoading(false);
+        }
+    }, [address, publicClient, writeContractAsync]);
+
+    // New channel creation methods
+    const requestChannelCreation = useCallback(async () => {
+        if (!clientRef.current) {
+            setError('Client not initialized');
+            return;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            await clientRef.current.requestChannelCreation();
+        } catch (err: any) {
+            console.error('Request channel creation failed:', err);
+            setError(err?.message || 'Failed to request channel creation');
+        } finally {
+            setIsLoading(false);
+        }
+    }, []);
+
+    const createChannelOnChain = useCallback(async (): Promise<string | null> => {
+        if (!clientRef.current) {
+            setError('Client not initialized');
+            return null;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            const txHash = await clientRef.current.createChannelOnChain();
+            setDepositHash(txHash); // Reuse depositHash for channel creation too
+            return txHash;
+        } catch (err: any) {
+            console.error('Create channel on-chain failed:', err);
+            setError(err?.message || 'Failed to create channel on-chain');
+            return null;
+        } finally {
+            setIsLoading(false);
+        }
+    }, []);
+
     // Derived state
     const isConnected = session.state !== 'disconnected' && session.state !== 'error';
     const isReady = session.state === 'session_ready' || session.state === 'authenticated';
+    const hasPendingChannel = clientRef.current?.hasPendingChannel() || false;
 
     return {
         // State
@@ -235,6 +353,9 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
         isReady,
         isLoading,
         error,
+        depositHash,
+        channelTxHash: session.channelOpenHash || null,
+        hasPendingChannel,
 
         // Actions
         connect,
@@ -243,6 +364,9 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
         sendPayment,
         closeSession,
         requestTestTokens,
+        depositToChannel,
+        requestChannelCreation,
+        createChannelOnChain,
 
         // Info
         sessionId: session.sessionId || null,

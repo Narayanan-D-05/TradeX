@@ -197,6 +197,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const [txHash, setTxHash] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [useGasless, setUseGasless] = useState(true);
+    const [swapMode, setSwapMode] = useState<'gasless' | 'standard'>('gasless');
 
     const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
@@ -578,6 +579,30 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </div>
             </div>
 
+            {/* Mode Toggle */}
+            {isConnected && (
+                <div className="mb-4 flex items-center justify-center gap-2 p-2 bg-gray-800/50 rounded-lg">
+                    <button
+                        onClick={() => { setSwapMode('gasless'); setUseGasless(true); }}
+                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${swapMode === 'gasless'
+                            ? 'bg-yellow-500/30 text-yellow-300 border border-yellow-500/50'
+                            : 'text-gray-400 hover:text-gray-200'
+                            }`}
+                    >
+                        ⚡ Yellow Gasless
+                    </button>
+                    <button
+                        onClick={() => { setSwapMode('standard'); setUseGasless(false); }}
+                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${swapMode === 'standard'
+                            ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-500/50'
+                            : 'text-gray-400 hover:text-gray-200'
+                            }`}
+                    >
+                        ⛽ Standard (LI.FI)
+                    </button>
+                </div>
+            )}
+
             {/* Yellow Network SDK Status */}
             {useGasless && isConnected && (
                 <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
@@ -602,23 +627,62 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 </button>
                             </div>
                         ) : yellow.session.state === 'authenticated' ? (
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-emerald-400">✓ Authenticated</span>
-                                <button
-                                    onClick={yellow.requestTestTokens}
-                                    disabled={yellow.isLoading}
-                                    className="text-xs px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-blue-300 disabled:opacity-50"
-                                    title="Get ytest.usd tokens from Yellow Network faucet"
-                                >
-                                    Get Tokens
-                                </button>
-                                <button
-                                    onClick={() => yellow.openSession(CONTRACTS.LIFI_ROUTER, '1000000')}
-                                    disabled={yellow.isLoading}
-                                    className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300 disabled:opacity-50"
-                                >
-                                    Create Session
-                                </button>
+                            <div className="flex flex-col gap-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-emerald-400">✓ Authenticated</span>
+                                    <button
+                                        onClick={yellow.requestTestTokens}
+                                        disabled={yellow.isLoading}
+                                        className="text-xs px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-blue-300 disabled:opacity-50"
+                                        title="Get ytest.usd tokens from Yellow Network faucet"
+                                    >
+                                        Get Tokens
+                                    </button>
+                                </div>
+
+                                {/* Channel Creation Buttons */}
+                                {!yellow.hasPendingChannel && !yellow.channelTxHash && (
+                                    <button
+                                        onClick={async () => {
+                                            await yellow.requestChannelCreation();
+                                        }}
+                                        disabled={yellow.isLoading}
+                                        className="w-full px-3 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all"
+                                    >
+                                        {yellow.isLoading ? '⏳ Processing...' : '📡 Request Channel (WebSocket)'}
+                                    </button>
+                                )}
+
+                                {yellow.hasPendingChannel && (
+                                    <button
+                                        onClick={async () => {
+                                            const hash = await yellow.createChannelOnChain();
+                                            if (hash) {
+                                                alert(`🎉 ON-CHAIN CHANNEL CREATED!\n\nTX Hash: ${hash}\n\nView on Etherscan: https://sepolia.etherscan.io/tx/${hash}`);
+                                            }
+                                        }}
+                                        disabled={yellow.isLoading}
+                                        className="w-full px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all animate-pulse"
+                                    >
+                                        {yellow.isLoading ? '⏳ Submitting...' : '🔗 Create Channel ON-CHAIN (TX Proof!)'}
+                                    </button>
+                                )}
+
+                                {yellow.channelTxHash && (
+                                    <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                                        <span className="text-emerald-500/80 block mb-1">✅ Channel Created On-Chain!</span>
+                                        <a
+                                            href={`https://sepolia.etherscan.io/tx/${yellow.channelTxHash}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-emerald-300 hover:text-emerald-200 hover:underline break-all font-mono text-xs"
+                                        >
+                                            {yellow.channelTxHash.slice(0, 10)}...{yellow.channelTxHash.slice(-8)} →
+                                        </a>
+                                    </div>
+                                )}
+
+                                <p className="text-xs text-gray-500">Uses NitroliteClient for verifiable on-chain proof</p>
                             </div>
                         ) : yellow.session.state === 'authenticating' ? (
                             <div className="flex items-center gap-2">
@@ -651,6 +715,42 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                             </button>
                         )}
                     </div>
+
+                    {/* Session Details */}
+                    {yellow.session.sessionId && (
+                        <div className="mt-3 pt-2 border-t border-yellow-500/20 space-y-2 text-xs">
+                            <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                    <span className="text-yellow-500/60 block">Status</span>
+                                    <span className="text-yellow-200 capitalize">{yellow.session.state.replace('_', ' ')}</span>
+                                </div>
+                                <div className="text-right">
+                                    <span className="text-yellow-500/60 block">Off-Chain Balance</span>
+                                    <span className="text-emerald-300 font-mono">
+                                        {yellow.session.balance
+                                            ? `${formatEther(BigInt(yellow.session.balance))} TEST`
+                                            : '0.00 TEST'}
+                                    </span>
+                                </div>
+                            </div>
+                            {/* Channel Open Hash - On-Chain Proof */}
+                            {(yellow.session.channelOpenHash || yellow.depositHash) && (
+                                <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                                    <span className="text-emerald-500/80 block mb-1">🔗 Deposit TX (On-Chain Proof)</span>
+                                    <a
+                                        href={`https://sepolia.etherscan.io/tx/${yellow.session.channelOpenHash || yellow.depositHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-emerald-300 hover:text-emerald-200 hover:underline break-all font-mono"
+                                    >
+                                        {(yellow.session.channelOpenHash || yellow.depositHash || '').slice(0, 10)}...{(yellow.session.channelOpenHash || yellow.depositHash || '').slice(-8)} →
+                                    </a>
+                                    <p className="text-xs text-emerald-400/60 mt-1">✓ Verified on Sepolia Etherscan</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* SDK Info */}
                     <div className="mt-2 text-xs text-yellow-500/70 flex items-center justify-between">
                         <span>SDK: @erc7824/nitrolite • State Channels</span>
@@ -704,14 +804,31 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                             </div>
                         </div>
                     ) : txHash ? (
-                        <a
-                            href={`https://sepolia.etherscan.io/tx/${txHash}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-indigo-400 hover:underline break-all"
-                        >
-                            View on Etherscan →
-                        </a>
+                        <div className="space-y-3">
+                            {/* LI.FI Explorer Link - Primary Verification */}
+                            <a
+                                href={`https://scan.li.fi/tx/${txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2 p-3 bg-indigo-500/20 border border-indigo-500/30 rounded-lg text-indigo-300 hover:bg-indigo-500/30 transition-colors"
+                            >
+                                <span className="text-lg">🔗</span>
+                                <div>
+                                    <div className="font-medium">View on LI.FI Explorer</div>
+                                    <div className="text-xs text-indigo-400/70">Cross-chain verification</div>
+                                </div>
+                                <span className="ml-auto">→</span>
+                            </a>
+                            {/* Etherscan Link - Secondary */}
+                            <a
+                                href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm text-gray-400 hover:text-gray-200 hover:underline break-all block"
+                            >
+                                View on Sepolia Etherscan →
+                            </a>
+                        </div>
                     ) : null}
 
                     <button onClick={resetState} className="mt-4 btn-primary w-full">
