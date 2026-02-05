@@ -3,9 +3,16 @@
 import { SwapCard } from "@/components/SwapCard";
 import { WalletButton } from "@/components/WalletButton";
 import { useState } from "react";
+import { useAccount, useSwitchChain } from "wagmi";
 
 export default function Home() {
   const [mode, setMode] = useState<'fundBroker' | 'sendHome'>('fundBroker');
+  const { chainId, isConnected } = useAccount();
+  const { switchChain } = useSwitchChain();
+
+  const requiredChainId = mode === 'fundBroker' ? 11155111 : 5042002;
+  const targetNetworkName = mode === 'fundBroker' ? 'Sepolia' : 'Arc Testnet';
+  const isWrongNetwork = isConnected && chainId !== requiredChainId;
 
   return (
     <main className="min-h-screen bg-[#0a0b0f] text-white">
@@ -32,11 +39,30 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Network Badge */}
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 border border-gray-700 rounded-full">
-            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-            <span className="text-sm text-gray-300">Sepolia</span>
-          </div>
+          {/* Network Badge / Switcher */}
+          {isConnected && (
+            isWrongNetwork ? (
+              <button
+                onClick={async () => {
+                  try {
+                    await switchChain({ chainId: requiredChainId });
+                  } catch (err) {
+                    console.error('Failed to switch network:', err);
+                    alert('Failed to switch network. Please try manually in your wallet.');
+                  }
+                }}
+                className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-red-500/10 border border-red-500 rounded-full hover:bg-red-500/20 transition cursor-pointer"
+              >
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                <span className="text-sm text-red-300 font-semibold">Switch to {targetNetworkName}</span>
+              </button>
+            ) : (
+              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded-full">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span className="text-sm text-emerald-300">{targetNetworkName}</span>
+              </div>
+            )
+          )}
           <WalletButton />
         </div>
       </header>
@@ -49,8 +75,8 @@ export default function Home() {
             <button
               onClick={() => setMode('fundBroker')}
               className={`px-6 py-2.5 rounded-lg font-medium transition-all ${mode === 'fundBroker'
-                  ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
-                  : 'text-gray-400 hover:text-white'
+                ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
+                : 'text-gray-400 hover:text-white'
                 }`}
             >
               🏦 Fund Broker
@@ -58,8 +84,8 @@ export default function Home() {
             <button
               onClick={() => setMode('sendHome')}
               className={`px-6 py-2.5 rounded-lg font-medium transition-all ${mode === 'sendHome'
-                  ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
-                  : 'text-gray-400 hover:text-white'
+                ? 'bg-green-500 text-white shadow-lg shadow-green-500/20'
+                : 'text-gray-400 hover:text-white'
                 }`}
             >
               🏠 Send Home

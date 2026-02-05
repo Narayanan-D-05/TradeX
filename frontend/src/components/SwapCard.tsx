@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient } from 'wagmi';
 import { parseEther, parseUnits, formatEther, encodeFunctionData } from 'viem';
+import { useYellowNetwork } from '@/hooks/useYellowNetwork';
 
 // Contract ABIs
 const TRADEX_ABI = [
@@ -203,7 +204,28 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const publicClient = usePublicClient();
     const { switchChainAsync } = useSwitchChain();
 
-    // Check if user has active Yellow session
+    // Yellow Network SDK Integration
+    const yellow = useYellowNetwork();
+
+    // Check for "Zombie" sessions (Expired but still marked Active in storage)
+    const { data: sessionData, refetch: refetchSession } = useReadContract({
+        address: CONTRACTS.YELLOW_ADAPTER,
+        abi: YELLOW_ABI,
+        functionName: 'getSession',
+        args: address ? [address] : undefined,
+    });
+
+    // Parse session data
+    // Struct: [user, deposit, spent, nonce, expiry, active]
+    const currentSession = sessionData ? {
+        expiry: Number((sessionData as any).expiry || (Array.isArray(sessionData) ? sessionData[4] : 0)),
+        isActive: (sessionData as any).active || (Array.isArray(sessionData) ? sessionData[5] : false),
+        deposit: (sessionData as any).deposit || (Array.isArray(sessionData) ? sessionData[1] : BigInt(0)),
+    } : null;
+
+    const isSessionExpired = currentSession ? (Date.now() / 1000) > currentSession.expiry : false;
+    const isZombieSession = currentSession?.isActive && isSessionExpired;
+
     const { data: hasSession } = useReadContract({
         address: CONTRACTS.YELLOW_ADAPTER,
         abi: YELLOW_ABI,
@@ -211,12 +233,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         args: address ? [address] : undefined,
     });
 
-    const { data: sessionBalance } = useReadContract({
-        address: CONTRACTS.YELLOW_ADAPTER,
-        abi: YELLOW_ABI,
-        functionName: 'getSessionBalance',
-        args: address ? [address] : undefined,
-    });
+    const sessionBalance = currentSession ? (currentSession.deposit as bigint) : BigInt(0);
 
     // Mock exchange rates (from TradeXOracle)
     const INR_TO_AED_RATE = 0.044;
@@ -274,7 +291,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     };
 
     const openYellowSession = async () => {
-        if (!isConnected) return;
+        if (!isConnected || !publicClient || !address) return;
 
         setStep('opening-session');
 
@@ -283,25 +300,43 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         if (!isCorrectNetwork) return;
 
         try {
-            // Open session with 0.01 ETH deposit (min requirement) for ~20 gasless transactions
+            // Check ETH balance before opening session
+            const balance = await publicClient.getBalance({ address });
+            const requiredDeposit = parseEther('0.01'); // Reduced to 0.01 ETH
+            const estimatedGas = parseEther('0.01'); // Estimated gas cost
+
+            if (balance < (requiredDeposit + estimatedGas)) {
+                setErrorMsg(`Insufficient ETH. Need at least ${formatEther(requiredDeposit + estimatedGas)} SepoliaETH (${formatEther(requiredDeposit)} deposit + gas). You have ${formatEther(balance)}.`);
+                setStep('error');
+                setUseGasless(false);
+                return;
+            }
+
+            // Open session with 0.01 ETH deposit for gasless transactions
             const hash = await writeContractAsync({
                 address: CONTRACTS.YELLOW_ADAPTER,
                 abi: YELLOW_ABI,
                 functionName: 'openSession',
                 args: [BigInt(3600)], // 1 hour session
-                value: parseEther('0.05'), // Match contract minDeposit
+                value: requiredDeposit,
             });
             console.log('Session opened:', hash);
+
+            // Wait for confirmation
+            await publicClient.waitForTransactionReceipt({ hash });
             setStep('idle');
         } catch (error: any) {
             console.error('Failed to open session:', error);
             // For Demo: If gasless fails (e.g. insufficient funds for deposit), allow proceeding without gasless
-            setErrorMsg('Gasless session failed, but you can proceed with standard gas.');
+            const msg = error.message?.includes('insufficient funds')
+                ? 'Insufficient ETH for gasless session. Please get some Sepolia ETH from a faucet or use standard gas mode.'
+                : 'Gasless session failed, but you can proceed with standard gas.';
+            setErrorMsg(msg);
             setTimeout(() => {
                 setErrorMsg(null);
                 setStep('idle');
                 setUseGasless(false); // Fallback to standard gas
-            }, 3000);
+            }, 5000);
         }
     };
 
@@ -316,8 +351,14 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         const targetChainId = isFundBroker ? 11155111 : 5042002; // Sepolia or Arc
 
         // Ensure network before starting
-        const isCorrectNetwork = await ensureNetwork(targetChainId);
-        if (!isCorrectNetwork) return;
+        if (chainId !== targetChainId) {
+            const success = await ensureNetwork(targetChainId);
+            if (success) {
+                setErrorMsg('Network switched via Wallet. Please click Swap again to continue.');
+                setStep('idle');
+            }
+            return;
+        }
 
         try {
             const amountInWei = parseUnits(amount, 18);
@@ -370,95 +411,79 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             const tokenOut = isFundBroker ? CONTRACTS.AED_STABLE : CONTRACTS.INR_STABLE;
             const destinationChainId = isFundBroker ? BigInt(5042002) : BigInt(11155111);
 
-            if (useGasless && hasSession) {
-                // YELLOW GASLESS FLOW
-                console.log("Preparing Gasless Transaction...");
+            if (useGasless && yellow.isReady) {
+                // ====== YELLOW NETWORK SDK GASLESS FLOW ======
+                // Uses official @erc7824/nitrolite SDK for off-chain state channels
+                console.log("🟡 Using Yellow Network SDK for GASLESS transaction...");
+                console.log("   Session state:", yellow.session.state);
+                console.log("   Session ID:", yellow.sessionId);
 
-                // 1. Get Nonce
-                const sessionData = await publicClient.readContract({
-                    address: CONTRACTS.YELLOW_ADAPTER,
-                    abi: YELLOW_ABI,
-                    functionName: 'sessions',
-                    args: [address]
-                }) as any; // Cast to any because wagmi return types can be array or object
+                try {
+                    // The Yellow SDK sendPayment uses state channels for instant, gasless transfers
+                    // This happens OFF-CHAIN in the Yellow Network clearing layer
+                    await yellow.sendPayment(
+                        amountInWei.toString(),
+                        recipient as `0x${string}`
+                    );
 
-                // Assuming sessionData is array [user, deposit, spent, nonce, ...] based on ABI order
-                // Need to verify if it returns object or array. Usually array for struct mapping.
-                // Safest to access by index if array, or check structure.
-                // 0n is falsy, so we must use nullish coalescing (??) instead of OR (||)
-                const userNonce = sessionData.nonce ?? sessionData[3];
-                console.log('Session Nonce:', userNonce);
+                    console.log("✅ Yellow Network payment sent (GASLESS - no blockchain tx!)");
 
-                // 2. Prepare Zap Request
-                const zapRequest = {
-                    tokenIn: tokenAddress,
-                    tokenOut: tokenOut,
-                    amountIn: amountInWei,
-                    minAmountOut: (amountInWei * BigInt(97)) / BigInt(100), // 3% slippage
-                    destinationChainId: destinationChainId,
-                    recipient: recipient as `0x${string}`,
-                    lifiData: "0x" as `0x${string}`
-                };
+                    // For Yellow SDK, there's no on-chain hash immediately
+                    // The transaction is settled off-chain in the state channel
+                    swapHash = `yellow-offchain-${Date.now()}` as `0x${string}`;
 
-                // 3. Encode Function Call
-                const encodedData = encodeFunctionData({
-                    abi: LIFI_ABI,
-                    functionName: 'executeZapGasless',
-                    args: [zapRequest, address]
-                });
+                    // Show success with Yellow Network badge
+                    setStep('success');
+                    alert('✅ Gasless payment sent via Yellow Network! The transaction was processed off-chain using state channels - no gas fees!');
 
-                // 4. Create MetaTransaction
-                const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
-                const metaTx = {
-                    to: CONTRACTS.LIFI_ROUTER,
-                    value: BigInt(0),
-                    data: encodedData,
-                    nonce: userNonce,
-                    deadline: deadline
-                };
+                } catch (yellowError: any) {
+                    console.error("Yellow SDK payment failed:", yellowError);
 
-                // 5. Sign Typed Data
-                const signature = await signTypedDataAsync({
-                    domain: {
-                        name: "TradeX Yellow Adapter",
-                        version: "1",
-                        chainId: chainId,
-                        verifyingContract: CONTRACTS.YELLOW_ADAPTER
-                    },
-                    types: {
-                        MetaTransaction: [
-                            { name: 'to', type: 'address' },
-                            { name: 'value', type: 'uint256' },
-                            { name: 'data', type: 'bytes' },
-                            { name: 'nonce', type: 'uint256' },
-                            { name: 'deadline', type: 'uint256' }
-                        ]
-                    },
-                    primaryType: 'MetaTransaction',
-                    message: metaTx
-                });
+                    // Fallback to standard gas flow if Yellow fails
+                    console.log("⚠️ Falling back to standard on-chain transaction...");
+                    setErrorMsg(`Yellow Network error: ${yellowError.message}. Trying standard transaction...`);
 
-                console.log("Signature obtained:", signature);
+                    // Execute standard swap as fallback
+                    if (isFundBroker) {
+                        swapHash = await writeContractAsync({
+                            address: CONTRACTS.LIFI_ROUTER,
+                            abi: LIFI_ABI,
+                            functionName: 'zapToArc',
+                            args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                        });
+                    } else {
+                        swapHash = await writeContractAsync({
+                            address: CONTRACTS.LIFI_ROUTER,
+                            abi: LIFI_ABI,
+                            functionName: 'zapToSepolia',
+                            args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                        });
+                    }
+                }
 
-                // 6. Relayer Submission (Simulated by User)
-                // In production, send `metaTx` and `signature` to Relayer API
-                swapHash = await writeContractAsync({
-                    address: CONTRACTS.YELLOW_ADAPTER,
-                    abi: YELLOW_ABI,
-                    functionName: 'executeGasless',
-                    args: [address, metaTx, signature],
-                    gas: BigInt(500000)
-                });
-
+            } else if (useGasless && !yellow.isReady) {
+                // Yellow enabled but not ready - prompt user
+                setErrorMsg('Yellow Network session not ready. Click "Connect" in the Yellow Network section first, then try again.');
+                setStep('error');
+                return;
             } else {
                 // STANDARD GAS FLOW
+                // Check ETH balance for gas
+                const ethBalance = await publicClient!.getBalance({ address: address! });
+                const estimatedGas = parseEther('0.02'); // Conservative estimate
+
+                if (ethBalance < estimatedGas) {
+                    setErrorMsg(`Insufficient ETH for gas fees. Need at least ${formatEther(estimatedGas)} SepoliaETH. You have ${formatEther(ethBalance)}. Get Sepolia ETH from a faucet.`);
+                    setStep('error');
+                    return;
+                }
+
                 if (isFundBroker) {
                     swapHash = await writeContractAsync({
                         address: CONTRACTS.LIFI_ROUTER,
                         abi: LIFI_ABI,
                         functionName: 'zapToArc',
                         args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
-                        gas: BigInt(500000),
                     });
                 } else {
                     swapHash = await writeContractAsync({
@@ -466,7 +491,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         abi: LIFI_ABI,
                         functionName: 'zapToSepolia',
                         args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
-                        gas: BigInt(500000),
                     });
                 }
             }
@@ -500,6 +524,39 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         }
     };
 
+    const mintTestTokens = async () => {
+        if (!isConnected || !address) return;
+
+        setStep('minting');
+        try {
+            const hash = await writeContractAsync({
+                address: sourceTokenAddress,
+                abi: [
+                    {
+                        name: 'faucet',
+                        type: 'function',
+                        inputs: [],
+                        outputs: []
+                    }
+                ] as const,
+                functionName: 'faucet',
+            });
+
+            console.log('Faucet tx:', hash);
+
+            if (publicClient) {
+                await publicClient.waitForTransactionReceipt({ hash });
+            }
+
+            await refetchBalance();
+            setStep('idle');
+        } catch (error: any) {
+            console.error('Mint failed:', error);
+            setErrorMsg('Failed to mint tokens. Try again.');
+            setStep('error');
+        }
+    };
+
     const resetState = () => {
         setStep('idle');
         setAmount('');
@@ -521,27 +578,101 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </div>
             </div>
 
-            {/* Yellow Session Status */}
+            {/* Yellow Network SDK Status */}
             {useGasless && isConnected && (
                 <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                             <span className="text-yellow-400">⚡</span>
-                            <span className="text-sm text-yellow-200">Yellow Gasless</span>
+                            <span className="text-sm text-yellow-200">Yellow Network</span>
+                            {yellow.isLoading && (
+                                <span className="text-xs text-yellow-500 animate-pulse">Loading...</span>
+                            )}
                         </div>
-                        {hasSession ? (
-                            <span className="text-xs text-emerald-400">
-                                Session Active • {sessionBalance ? formatEther(sessionBalance as bigint) : '0'} ETH
+                        {yellow.session.state === 'session_ready' ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-emerald-400">
+                                    ✓ Session Ready
+                                </span>
+                                <button
+                                    onClick={yellow.closeSession}
+                                    className="text-xs px-2 py-1 bg-gray-500/20 hover:bg-gray-500/30 rounded text-gray-300"
+                                >
+                                    Close
+                                </button>
+                            </div>
+                        ) : yellow.session.state === 'authenticated' ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-emerald-400">✓ Authenticated</span>
+                                <button
+                                    onClick={yellow.requestTestTokens}
+                                    disabled={yellow.isLoading}
+                                    className="text-xs px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-blue-300 disabled:opacity-50"
+                                    title="Get ytest.usd tokens from Yellow Network faucet"
+                                >
+                                    Get Tokens
+                                </button>
+                                <button
+                                    onClick={() => yellow.openSession(CONTRACTS.LIFI_ROUTER, '1000000')}
+                                    disabled={yellow.isLoading}
+                                    className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300 disabled:opacity-50"
+                                >
+                                    Create Session
+                                </button>
+                            </div>
+                        ) : yellow.session.state === 'authenticating' ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-yellow-400 animate-pulse">🔐 Signing...</span>
+                                <span className="text-xs text-gray-400">(Check wallet)</span>
+                            </div>
+                        ) : yellow.session.state === 'connecting' || yellow.session.state === 'connected' ? (
+                            <span className="text-xs text-yellow-400 animate-pulse">
+                                Connecting...
                             </span>
+                        ) : yellow.session.state === 'error' ? (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-red-400">
+                                    ⚠ {yellow.error?.slice(0, 25) || 'Error'}
+                                </span>
+                                <button
+                                    onClick={yellow.connect}
+                                    className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300"
+                                >
+                                    Retry
+                                </button>
+                            </div>
                         ) : (
                             <button
-                                onClick={openYellowSession}
-                                disabled={step !== 'idle'}
-                                className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300"
+                                onClick={yellow.connect}
+                                disabled={yellow.isLoading}
+                                className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300 disabled:opacity-50"
                             >
-                                Open Session (0.05 ETH)
+                                Connect
                             </button>
                         )}
+                    </div>
+                    {/* SDK Info */}
+                    <div className="mt-2 text-xs text-yellow-500/70 flex items-center justify-between">
+                        <span>SDK: @erc7824/nitrolite • State Channels</span>
+                        <span className="capitalize">{yellow.session.state}</span>
+                    </div>
+                </div>
+            )}
+
+            {/* Testnet Info Banner */}
+            {isConnected && (
+                <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                    <div className="text-xs text-blue-300 space-y-1">
+                        <div className="flex items-center gap-2">
+                            <span>ℹ️</span>
+                            <span className="font-semibold">Testnet Mode</span>
+                        </div>
+                        <div className="text-blue-400/80">
+                            • Click <strong>Faucet</strong> to get 10,000 test {sourceToken}
+                        </div>
+                        <div className="text-blue-400/80">
+                            • Get Sepolia ETH: <a href="https://sepoliafaucet.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-blue-300">sepoliafaucet.com</a>
+                        </div>
                     </div>
                 </div>
             )}
@@ -555,7 +686,24 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         </svg>
                         <span className="font-bold">Transaction Successful!</span>
                     </div>
-                    {txHash && (
+
+                    {/* Check if this is a Yellow Network off-chain transaction */}
+                    {txHash?.startsWith('yellow-offchain') ? (
+                        <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-yellow-400">
+                                <span>⚡</span>
+                                <span className="text-sm font-medium">Yellow Network Off-Chain Settlement</span>
+                            </div>
+                            <div className="text-xs text-gray-400 space-y-1">
+                                <p>✅ This transaction was processed <strong className="text-yellow-300">instantly and gaslessly</strong> using Yellow Network state channels.</p>
+                                <p>💰 <strong className="text-emerald-300">No gas fees paid!</strong> The payment was settled off-chain in the Yellow Network clearing layer.</p>
+                                <p>🔐 Funds are secured by the Nitrolite protocol and can be withdrawn to L1 anytime.</p>
+                            </div>
+                            <div className="mt-3 p-2 bg-gray-800/50 rounded text-xs text-gray-500">
+                                Off-chain ID: {txHash}
+                            </div>
+                        </div>
+                    ) : txHash ? (
                         <a
                             href={`https://sepolia.etherscan.io/tx/${txHash}`}
                             target="_blank"
@@ -564,7 +712,8 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         >
                             View on Etherscan →
                         </a>
-                    )}
+                    ) : null}
+
                     <button onClick={resetState} className="mt-4 btn-primary w-full">
                         Make Another Swap
                     </button>
@@ -572,164 +721,181 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             )}
 
             {/* Error State */}
-            {step === 'error' && (
-                <div className="mb-6 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
-                    <div className="flex items-center gap-2 text-red-400 mb-2">
-                        <span className="font-bold">❌ Transaction Failed</span>
+            {
+                step === 'error' && (
+                    <div className="mb-6 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
+                        <div className="flex items-center gap-2 text-red-400 mb-2">
+                            <span className="font-bold">❌ Transaction Failed</span>
+                        </div>
+                        <p className="text-sm text-gray-300">{errorMsg}</p>
+                        <button onClick={resetState} className="mt-4 btn-primary w-full">
+                            Try Again
+                        </button>
                     </div>
-                    <p className="text-sm text-gray-300">{errorMsg}</p>
-                    <button onClick={resetState} className="mt-4 btn-primary w-full">
-                        Try Again
-                    </button>
-                </div>
-            )}
+                )
+            }
 
             {/* Form */}
-            {step !== 'success' && step !== 'error' && (
-                <>
-                    {/* From Input */}
-                    <div className="mb-4">
-                        <div className="flex justify-between mb-2">
-                            <label className="block text-sm text-gray-400">You Send</label>
-                            {isConnected && (
-                                <div className="text-xs flex gap-2 items-center">
-                                    <span className="text-gray-500">
-                                        Balance: {tokenBalance ? parseFloat(formatEther(tokenBalance as bigint)).toFixed(2) : '0'} {sourceToken}
+            {
+                step !== 'success' && step !== 'error' && (
+                    <>
+                        {/* From Input */}
+                        <div className="mb-4">
+                            <div className="flex justify-between mb-2">
+                                <label className="block text-sm text-gray-400">You Send</label>
+                                {isConnected && (
+                                    <div className="text-xs flex gap-2 items-center">
+                                        <span className="text-gray-500">
+                                            Balance: {tokenBalance ? parseFloat(formatEther(tokenBalance as bigint)).toFixed(2) : '0'} {sourceToken}
+                                        </span>
+                                        <button
+                                            onClick={mintTestTokens}
+                                            disabled={step !== 'idle'}
+                                            className="text-green-400 hover:text-green-300 uppercase font-semibold disabled:opacity-50"
+                                            title="Get 10,000 test tokens"
+                                        >
+                                            Faucet
+                                        </button>
+                                        <button
+                                            onClick={handleMaxClick}
+                                            className="text-indigo-400 hover:text-indigo-300 uppercase font-semibold"
+                                        >
+                                            Max
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="relative">
+                                <input
+                                    type="number"
+                                    value={amount}
+                                    onChange={(e) => setAmount(e.target.value)}
+                                    placeholder="0.00"
+                                    className="input-field pr-20 text-2xl font-semibold"
+                                    disabled={step !== 'idle'}
+                                />
+                                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                    <span className="text-lg font-medium text-gray-300">{sourceToken}</span>
+                                    <span className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs">
+                                        {isFundBroker ? '₹' : 'د'}
                                     </span>
-                                    <button
-                                        onClick={handleMaxClick}
-                                        className="text-indigo-400 hover:text-indigo-300 uppercase font-semibold"
-                                    >
-                                        Max
-                                    </button>
                                 </div>
-                            )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                                Network: {sourceNetwork}
+                            </p>
                         </div>
-                        <div className="relative">
+
+                        {/* Swap Direction Indicator */}
+                        <div className="flex justify-center my-4">
+                            <div className="w-10 h-10 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center swap-icon">
+                                <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                                </svg>
+                            </div>
+                        </div>
+
+                        {/* To Output */}
+                        <div className="mb-4">
+                            <label className="block text-sm text-gray-400 mb-2">Recipient Gets</label>
+                            <div className="relative">
+                                <div className="input-field pr-20 text-2xl font-semibold bg-gray-900/50">
+                                    {calculateOutput()}
+                                </div>
+                                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                    <span className="text-lg font-medium text-gray-300">{destToken}</span>
+                                    <span className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs">
+                                        {isFundBroker ? 'د' : '₹'}
+                                    </span>
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-500 mt-1">
+                                Network: {destNetwork}
+                            </p>
+                        </div>
+
+                        {/* Recipient Address */}
+                        <div className="mb-6">
+                            <label className="block text-sm text-gray-400 mb-2">
+                                {isFundBroker ? 'Broker Wallet Address' : 'Recipient Wallet Address'}
+                            </label>
                             <input
-                                type="number"
-                                value={amount}
-                                onChange={(e) => setAmount(e.target.value)}
-                                placeholder="0.00"
-                                className="input-field pr-20 text-2xl font-semibold"
+                                type="text"
+                                value={recipient}
+                                onChange={(e) => setRecipient(e.target.value)}
+                                placeholder="0x..."
+                                className="input-field font-mono text-sm"
                                 disabled={step !== 'idle'}
                             />
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                                <span className="text-lg font-medium text-gray-300">{sourceToken}</span>
-                                <span className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs">
-                                    {isFundBroker ? '₹' : 'د'}
+                        </div>
+
+                        {/* Fee Breakdown */}
+                        <div className="bg-gray-900/50 rounded-lg p-4 mb-6 space-y-2">
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-400">Exchange Rate</span>
+                                <span className="text-white">
+                                    1 {sourceToken} = {isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE} {destToken}
                                 </span>
                             </div>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">
-                            Network: {sourceNetwork}
-                        </p>
-                    </div>
-
-                    {/* Swap Direction Indicator */}
-                    <div className="flex justify-center my-4">
-                        <div className="w-10 h-10 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center swap-icon">
-                            <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                            </svg>
-                        </div>
-                    </div>
-
-                    {/* To Output */}
-                    <div className="mb-4">
-                        <label className="block text-sm text-gray-400 mb-2">Recipient Gets</label>
-                        <div className="relative">
-                            <div className="input-field pr-20 text-2xl font-semibold bg-gray-900/50">
-                                {calculateOutput()}
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-400">Platform Fee (0.3%)</span>
+                                <span className="text-amber-400">{calculateFee()} {destToken}</span>
                             </div>
-                            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                                <span className="text-lg font-medium text-gray-300">{destToken}</span>
-                                <span className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xs">
-                                    {isFundBroker ? 'د' : '₹'}
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-400">Network Fee</span>
+                                <span className={hasSession ? "text-emerald-400" : "text-gray-400"}>
+                                    {hasSession ? '⚡ Gasless' : '~0.0002 ETH'}
                                 </span>
                             </div>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">
-                            Network: {destNetwork}
-                        </p>
-                    </div>
-
-                    {/* Recipient Address */}
-                    <div className="mb-6">
-                        <label className="block text-sm text-gray-400 mb-2">
-                            {isFundBroker ? 'Broker Wallet Address' : 'Recipient Wallet Address'}
-                        </label>
-                        <input
-                            type="text"
-                            value={recipient}
-                            onChange={(e) => setRecipient(e.target.value)}
-                            placeholder="0x..."
-                            className="input-field font-mono text-sm"
-                            disabled={step !== 'idle'}
-                        />
-                    </div>
-
-                    {/* Fee Breakdown */}
-                    <div className="bg-gray-900/50 rounded-lg p-4 mb-6 space-y-2">
-                        <div className="flex justify-between text-sm">
-                            <span className="text-gray-400">Exchange Rate</span>
-                            <span className="text-white">
-                                1 {sourceToken} = {isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE} {destToken}
-                            </span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                            <span className="text-gray-400">Platform Fee (0.3%)</span>
-                            <span className="text-amber-400">{calculateFee()} {destToken}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                            <span className="text-gray-400">Network Fee</span>
-                            <span className={hasSession ? "text-emerald-400" : "text-gray-400"}>
-                                {hasSession ? '⚡ Gasless' : '~0.0002 ETH'}
-                            </span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                            <span className="text-gray-400">Estimated Time</span>
-                            <span className="text-emerald-400">~45 seconds</span>
-                        </div>
-                        <div className="border-t border-gray-700 pt-2 mt-2">
-                            <div className="flex justify-between font-semibold">
-                                <span className="text-gray-300">You Save vs Banks</span>
-                                <span className="text-emerald-400">~70%</span>
+                            <div className="flex justify-between text-sm">
+                                <span className="text-gray-400">Estimated Time</span>
+                                <span className="text-emerald-400">~45 seconds</span>
+                            </div>
+                            <div className="border-t border-gray-700 pt-2 mt-2">
+                                <div className="flex justify-between font-semibold">
+                                    <span className="text-gray-300">You Save vs Banks</span>
+                                    <span className="text-emerald-400">~70%</span>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    {/* Swap Button */}
-                    <button
-                        onClick={handleSwap}
-                        disabled={!amount || !recipient || step !== 'idle' || !isConnected}
-                        className="btn-primary w-full flex items-center justify-center gap-2 text-lg"
-                    >
-                        {!isConnected ? (
-                            '🔗 Connect Wallet First'
-                        ) : step === 'opening-session' ? (
-                            <>
-                                <span className="spinner" />
-                                Opening Session...
-                            </>
-                        ) : step === 'approving' ? (
-                            <>
-                                <span className="spinner" />
-                                Approving...
-                            </>
-                        ) : step === 'swapping' ? (
-                            <>
-                                <span className="spinner" />
-                                Confirming Swap...
-                            </>
-                        ) : (
-                            <>
-                                {isFundBroker ? '🚀 Fund Broker' : '✈️ Send Home'}
-                            </>
-                        )}
-                    </button>
-                </>
-            )}
+                        {/* Swap Button */}
+                        <button
+                            onClick={handleSwap}
+                            disabled={!amount || !recipient || step !== 'idle' || !isConnected}
+                            className="btn-primary w-full flex items-center justify-center gap-2 text-lg"
+                        >
+                            {!isConnected ? (
+                                '🔗 Connect Wallet First'
+                            ) : step === 'opening-session' ? (
+                                <>
+                                    <span className="spinner" />
+                                    Opening Session...
+                                </>
+                            ) : step === 'minting' ? (
+                                <>
+                                    <span className="spinner" />
+                                    Minting Test Tokens...
+                                </>
+                            ) : step === 'approving' ? (
+                                <>
+                                    <span className="spinner" />
+                                    Approving...
+                                </>
+                            ) : step === 'swapping' ? (
+                                <>
+                                    <span className="spinner" />
+                                    Confirming Swap...
+                                </>
+                            ) : (
+                                <>
+                                    {isFundBroker ? '🚀 Fund Broker' : '✈️ Send Home'}
+                                </>
+                            )}
+                        </button>
+                    </>
+                )
+            }
 
 
             {/* Faucet for Testing */}
