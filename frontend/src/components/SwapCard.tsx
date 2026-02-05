@@ -727,10 +727,15 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 <div className="text-right">
                                     <span className="text-yellow-500/60 block">Off-Chain Balance</span>
                                     <span className="text-emerald-300 font-mono">
-                                        {yellow.session.balance
-                                            ? `${formatEther(BigInt(yellow.session.balance))} TEST`
+                                        {yellow.session.balanceRaw
+                                            ? `${(Number(yellow.session.balanceRaw) / Math.pow(10, yellow.session.balanceDecimals || 6)).toFixed(2)} ${yellow.session.balanceSymbol || 'TEST'}`
                                             : '0.00 TEST'}
                                     </span>
+                                    {yellow.session.isSimulated && (
+                                        <span className="text-xs text-orange-400 block mt-1">
+                                            ⚠️ Sandbox simulation
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                             {/* Channel Open Hash - On-Chain Proof */}

@@ -338,11 +338,6 @@ export function ProjectDetails() {
                         </div>
                     </div>
                 </div>
-                                <p className="text-sm text-gray-500">FEMA & KYC compliant for brokerage funding.</p>
-                            </div>
-                        </li>
-                    </ul>
-                </div>
 
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 font-mono text-xs md:text-sm text-gray-400 overflow-x-auto shadow-2xl shadow-blue-900/20">
                     <div className="mb-2 text-gray-500"># TradeX Architecture Flow</div>
