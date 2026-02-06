@@ -37,6 +37,7 @@ interface UseYellowNetworkReturn {
     openSession: (partnerAddress: Address, depositAmount?: string) => Promise<void>;
     sendPayment: (amount: string, recipient: Address) => Promise<void>;
     closeSession: () => void;
+    closeChannel: () => Promise<string | null>; // Close channel and withdraw funds, returns tx hash
     requestTestTokens: () => Promise<boolean>;
     depositToChannel: (amount: string) => Promise<string | null>; // Returns tx hash
     requestChannelCreation: () => Promise<void>; // Request channel via WebSocket
@@ -105,10 +106,7 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
         try {
             await clientRef.current.connect();
             console.log('✅ Connected to Yellow Network');
-
-            // Automatically start authentication after connecting
-            await clientRef.current.authenticate();
-            console.log('✅ Authentication started...');
+            console.log('⏭️  Next: Authenticate with Yellow Network');
         } catch (err) {
             console.error('Failed to connect:', err);
             setError(err instanceof Error ? err.message : 'Connection failed');
@@ -206,6 +204,31 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
     const closeSession = useCallback(() => {
         if (clientRef.current) {
             clientRef.current.disconnect();
+        }
+    }, []);
+
+    /**
+     * Close active channel and withdraw funds (ON-CHAIN!)
+     */
+    const closeChannel = useCallback(async (): Promise<string | null> => {
+        if (!clientRef.current) {
+            setError('Not connected');
+            return null;
+        }
+
+        setIsLoading(true);
+        setError(null);
+
+        try {
+            const txHash = await clientRef.current.closeChannel();
+            console.log('✅ Channel closed and funds withdrawn:', txHash);
+            return txHash;
+        } catch (err) {
+            console.error('Failed to close channel:', err);
+            setError(err instanceof Error ? err.message : 'Channel close failed');
+            return null;
+        } finally {
+            setIsLoading(false);
         }
     }, []);
 
@@ -330,7 +353,16 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
 
         try {
             const txHash = await clientRef.current.createChannelOnChain();
-            setDepositHash(txHash); // Reuse depositHash for channel creation too
+            console.log('🎉 Channel created on-chain! TX Hash:', txHash);
+            
+            // Update session with channel hash
+            setSession(prev => ({
+                ...prev,
+                channelOpenHash: txHash,
+                state: 'session_ready'
+            }));
+            
+            setDepositHash(txHash);
             return txHash;
         } catch (err: any) {
             console.error('Create channel on-chain failed:', err);
@@ -363,6 +395,7 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
         openSession,
         sendPayment,
         closeSession,
+        closeChannel,
         requestTestTokens,
         depositToChannel,
         requestChannelCreation,

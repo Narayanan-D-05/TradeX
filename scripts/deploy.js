@@ -17,14 +17,14 @@ async function main() {
     // 1. Deploy MockERC20 - INR Stable
     console.log("1️⃣  Deploying INR Stable token...");
     const MockERC20 = await hre.ethers.getContractFactory("MockERC20");
-    const inrStable = await MockERC20.deploy("INR Stable", "INRs", 18);
+    const inrStable = await MockERC20.deploy("INR Stable", "INRs", 6);
     await inrStable.waitForDeployment();
     addresses.INR_STABLE = await inrStable.getAddress();
     console.log("   ✅ INR Stable:", addresses.INR_STABLE);
 
     // 2. Deploy MockERC20 - AED Stable
     console.log("2️⃣  Deploying AED Stable token...");
-    const aedStable = await MockERC20.deploy("AED Stable", "AEDs", 18);
+    const aedStable = await MockERC20.deploy("AED Stable", "AEDs", 6);
     await aedStable.waitForDeployment();
     addresses.AED_STABLE = await aedStable.getAddress();
     console.log("   ✅ AED Stable:", addresses.AED_STABLE);
@@ -71,6 +71,18 @@ async function main() {
     await arcGateway.waitForDeployment();
     addresses.ARC_GATEWAY = await arcGateway.getAddress();
     console.log("   ✅ ArcGateway:", addresses.ARC_GATEWAY);
+
+    // 7b. Deploy CircleArcGateway (Circle Gateway Integration)
+    console.log("7️⃣b Deploying CircleArcGateway...");
+    const CircleArcGateway = await hre.ethers.getContractFactory("CircleArcGateway");
+    const circleArcGateway = await CircleArcGateway.deploy(
+        addresses.USDC,
+        addresses.INR_STABLE,
+        addresses.AED_STABLE
+    );
+    await circleArcGateway.waitForDeployment();
+    addresses.CIRCLE_ARC_GATEWAY = await circleArcGateway.getAddress();
+    console.log("   ✅ CircleArcGateway:", addresses.CIRCLE_ARC_GATEWAY);
 
     // 8. Deploy YellowAdapter
     console.log("8️⃣  Deploying YellowAdapter...");
@@ -151,8 +163,14 @@ NEXT_PUBLIC_BRIDGE=${addresses.BRIDGE}
 NEXT_PUBLIC_ORACLE=${addresses.ORACLE}
 NEXT_PUBLIC_COMPLIANCE=${addresses.COMPLIANCE}
 NEXT_PUBLIC_ARC_GATEWAY=${addresses.ARC_GATEWAY}
+NEXT_PUBLIC_CIRCLE_ARC_GATEWAY=${addresses.CIRCLE_ARC_GATEWAY}
 NEXT_PUBLIC_YELLOW_ADAPTER=${addresses.YELLOW_ADAPTER}
 NEXT_PUBLIC_LIFI_ROUTER=${addresses.LIFI_ROUTER}
+
+# Circle Gateway Configuration
+NEXT_PUBLIC_CIRCLE_API_KEY=demo_key_for_sandbox
+NEXT_PUBLIC_CIRCLE_APP_ID=tradex_circle_gateway
+NEXT_PUBLIC_CIRCLE_ENVIRONMENT=sandbox
 `;
 
     fs.writeFileSync(envLocalPath, envContent);

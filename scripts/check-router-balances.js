@@ -36,8 +36,8 @@ async function main() {
     
     console.log("📊 Token Balances in Router:");
     console.log("─".repeat(80));
-    console.log(`INR: ${ethers.formatEther(inrBalance)}`);
-    console.log(`AED: ${ethers.formatEther(aedBalance)}`);
+    console.log(`INR: ${ethers.formatUnits(inrBalance, 6)}`);
+    console.log(`AED: ${ethers.formatUnits(aedBalance, 6)}`);
     console.log("─".repeat(80));
     console.log();
 

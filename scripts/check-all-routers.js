@@ -54,9 +54,9 @@ async function main() {
                 const symbol = await token.symbol();
                 
                 if (balance > 0) {
-                    console.log(`   💰 ${symbol}: ${ethers.formatEther(balance)} ⚠️ STUCK`);
+                    console.log(`   💰 ${symbol}: ${ethers.formatUnits(balance, 6)} ⚠️ STUCK`);
                 } else {
-                    console.log(`   ✅ ${symbol}: ${ethers.formatEther(balance)}`);
+                    console.log(`   ✅ ${symbol}: ${ethers.formatUnits(balance, 6)}`);
                 }
             } catch (e) {
                 console.log(`   ❌ ${name}: Error checking balance`);
@@ -87,8 +87,8 @@ async function main() {
                         if (zapDetails.recipient !== ethers.ZeroAddress) {
                             console.log(`\n   Zap #${i}:`);
                             console.log(`   - Recipient: ${zapDetails.recipient}`);
-                            console.log(`   - Amount In: ${ethers.formatEther(zapDetails.amountIn)}`);
-                            console.log(`   - Amount Out: ${ethers.formatEther(zapDetails.minAmountOut)}`);
+                            console.log(`   - Amount In: ${ethers.formatUnits(zapDetails.amountIn, 6)}`);
+                            console.log(`   - Amount Out: ${ethers.formatUnits(zapDetails.minAmountOut, 6)}`);
                             console.log(`   - Token Out: ${zapDetails.tokenOut}`);
                             console.log(`   - Dest Chain: ${zapDetails.destinationChainId}`);
                         }

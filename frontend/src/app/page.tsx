@@ -32,7 +32,10 @@ export default function Home() {
 
           {/* Navigation */}
           <nav className="hidden md:flex items-center gap-6">
-            <a href="#" className="text-sm text-white font-medium hover:text-blue-400 transition">Swap</a>
+            <a href="/" className="text-sm text-white font-medium hover:text-blue-400 transition">Swap</a>
+            <a href="/circle" className="text-sm text-blue-400 font-medium hover:text-blue-300 transition">
+              🔵 Circle Gateway
+            </a>
             <a href="#" className="text-sm text-gray-400 hover:text-white transition">Stats</a>
             <a href="#" className="text-sm text-gray-400 hover:text-white transition">Docs</a>
           </nav>
@@ -126,7 +129,7 @@ export default function Home() {
                     <span className="text-lg">⚡</span>
                   </div>
                   <p className="text-sm font-medium text-green-400">TradeX</p>
-                  <p className="text-xs text-gray-500">LI.FI + Yellow</p>
+                  <p className="text-xs text-gray-500">LI.FI + Yellow + Circle</p>
                   <span className="inline-block mt-2 px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-xs border border-green-500/30">
                     45s • 0.3% fee
                   </span>
@@ -203,6 +206,9 @@ export default function Home() {
                 </span>
                 <span className="px-4 py-2 bg-yellow-500/10 text-yellow-400 rounded-lg text-sm border border-yellow-500/20">
                   Yellow Network
+                </span>
+                <span className="px-4 py-2 bg-sky-500/10 text-sky-400 rounded-lg text-sm border border-sky-500/20">
+                  Circle Wallets
                 </span>
                 <span className="px-4 py-2 bg-gray-500/10 text-gray-400 rounded-lg text-sm border border-gray-500/20">
                   Ethereum

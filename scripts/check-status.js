@@ -63,7 +63,7 @@ async function main() {
             console.log(`Zap ID:          ${event.args.zapId}`);
             console.log(`Sender:          ${event.args.sender}`);
             console.log(`Token In:        ${event.args.tokenIn}`);
-            console.log(`Amount In:       ${hre.ethers.formatEther(event.args.amountIn)}`);
+            console.log(`Amount In:       ${hre.ethers.formatUnits(event.args.amountIn, 6)}`);
             console.log(`Dest Chain:      ${event.args.destinationChainId}`);
             console.log(`Block:           ${event.blockNumber}`);
             console.log(`TX Hash:         ${event.transactionHash}`);
@@ -74,7 +74,7 @@ async function main() {
                 console.log(`\n💰 Settlement Details:`);
                 console.log(`Recipient:       ${zapDetails.recipient}`);
                 console.log(`Token Out:       ${zapDetails.tokenOut}`);
-                console.log(`Min Amount Out:  ${hre.ethers.formatEther(zapDetails.minAmountOut)}`);
+                console.log(`Min Amount Out:  ${hre.ethers.formatUnits(zapDetails.minAmountOut, 6)}`);
 
                 // Determine what needs to happen
                 const destChainId = Number(zapDetails.destinationChainId);

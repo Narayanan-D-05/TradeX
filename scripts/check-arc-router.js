@@ -61,8 +61,8 @@ async function main() {
             console.log(`Recipient:        ${zapDetails.recipient}`);
             console.log(`Token In:         ${zapDetails.tokenIn}`);
             console.log(`Token Out:        ${zapDetails.tokenOut}`);
-            console.log(`Amount In:        ${ethers.formatEther(zapDetails.amountIn)}`);
-            console.log(`Min Amount Out:   ${ethers.formatEther(zapDetails.minAmountOut)}`);
+            console.log(`Amount In:        ${ethers.formatUnits(zapDetails.amountIn, 6)}`);
+            console.log(`Min Amount Out:   ${ethers.formatUnits(zapDetails.minAmountOut, 6)}`);
             console.log(`Destination Chain: ${zapDetails.destinationChainId}`);
             console.log("─".repeat(80));
             
@@ -71,7 +71,7 @@ async function main() {
                 const tokenIn = await ethers.getContractAt("MockERC20", zapDetails.tokenIn);
                 const balance = await tokenIn.balanceOf(OLD_LIFI_ROUTER);
                 const symbol = await tokenIn.symbol();
-                console.log(`\nRouter ${symbol} balance: ${ethers.formatEther(balance)}`);
+                console.log(`\nRouter ${symbol} balance: ${ethers.formatUnits(balance, 6)}`);
             }
         }
         

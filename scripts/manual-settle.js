@@ -69,7 +69,7 @@ async function main() {
 
         console.log(`${i + 1}. Zap ID: ${zapId}`);
         console.log(`   Sender: ${sender}`);
-        console.log(`   Amount: ${ethers.formatEther(amountIn)}`);
+        console.log(`   Amount: ${ethers.formatUnits(amountIn, 6)}`);
         console.log(`   Destination Chain: ${destinationChainId}`);
         console.log(`   Block: ${event.blockNumber}`);
 
@@ -77,7 +77,7 @@ async function main() {
         try {
             const zapDetails = await lifiRouter.pendingZaps(zapId);
             console.log(`   Recipient: ${zapDetails.recipient}`);
-            console.log(`   Output Amount: ${ethers.formatEther(zapDetails.minAmountOut)}`);
+            console.log(`   Output Amount: ${ethers.formatUnits(zapDetails.minAmountOut, 6)}`);
             console.log(`   Token Out: ${zapDetails.tokenOut}`);
         } catch (e) {
             console.log(`   (Could not fetch zap details)`);
@@ -106,7 +106,7 @@ async function main() {
             console.log(`   Zap ID: ${zapId}`);
             console.log(`   Recipient: ${recipient}`);
             console.log(`   Token: ${tokenOut}`);
-            console.log(`   Amount: ${ethers.formatEther(amountOut)}`);
+            console.log(`   Amount: ${ethers.formatUnits(amountOut, 6)}`);
             console.log();
 
             // Determine which token to mint based on network
@@ -137,7 +137,7 @@ async function main() {
             console.log(`\n   ✅ Settlement complete!`);
             console.log(`   Block: ${receipt.blockNumber}`);
             console.log(`   Gas used: ${receipt.gasUsed.toString()}`);
-            console.log(`\n   The recipient should now see ${ethers.formatEther(amountOut)} tokens in their wallet!`);
+            console.log(`\n   The recipient should now see ${ethers.formatUnits(amountOut, 6)} tokens in their wallet!`);
 
         } catch (error) {
             console.error("\n❌ Settlement failed:", error.message);

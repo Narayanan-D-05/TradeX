@@ -2,8 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient } from 'wagmi';
-import { parseEther, parseUnits, formatEther, encodeFunctionData } from 'viem';
+import { parseEther, parseUnits, formatEther, formatUnits, encodeFunctionData } from 'viem';
 import { useYellowNetwork } from '@/hooks/useYellowNetwork';
+import { useCircleWallet } from '@/hooks/useCircleWallet';
+import { useLiFi } from '@/hooks/useLiFi';
+import { SUPPORTED_CHAINS, TEST_TOKENS } from '@/lib/lifiService';
 
 // Contract ABIs
 const TRADEX_ABI = [
@@ -175,14 +178,14 @@ const LIFI_ABI = [
     }
 ] as const;
 
-// Contract addresses (newly deployed)
+// Contract addresses (newly deployed - 6 decimal INR/AED)
 // Contract addresses (Loaded from Env)
 const CONTRACTS = {
-    TRADEX: (process.env.NEXT_PUBLIC_TRADEX || '0x011BCCA0Fa806944a74e0E13965412d275E02A08') as `0x${string}`,
-    INR_STABLE: (process.env.NEXT_PUBLIC_INR_STABLE || '0x0F09aD4F62f6C592aDF35eF059a0B16f6Fe13010') as `0x${string}`,
-    AED_STABLE: (process.env.NEXT_PUBLIC_AED_STABLE || '0x5865b9E57643E92DE466a49fA2ab6095A8320d9B') as `0x${string}`,
-    YELLOW_ADAPTER: (process.env.NEXT_PUBLIC_YELLOW_ADAPTER || '0xF23584D7b593Cf4ba12d775C1C3E93C4D5342356') as `0x${string}`,
-    LIFI_ROUTER: (process.env.NEXT_PUBLIC_LIFI_ROUTER || '0x07d28E89C6320D2cdb6f67585cC35EE9fA944667') as `0x${string}`,
+    TRADEX: (process.env.NEXT_PUBLIC_TRADEX || '0x3c3fbdAfD1796f3DeDC0C34F51bfd905a494247a') as `0x${string}`,
+    INR_STABLE: (process.env.NEXT_PUBLIC_INR_STABLE || '0xC6DADFdf4c046D0A91946351A0aceee261DcA517') as `0x${string}`,
+    AED_STABLE: (process.env.NEXT_PUBLIC_AED_STABLE || '0x05016024652D0c947E5B49532e4287374720d3b2') as `0x${string}`,
+    YELLOW_ADAPTER: (process.env.NEXT_PUBLIC_YELLOW_ADAPTER || '0x2Bc0b16e923Da8D3fc557fF6cF13be061Af3744D') as `0x${string}`,
+    LIFI_ROUTER: (process.env.NEXT_PUBLIC_LIFI_ROUTER || '0x518042288Ab2633AE7EA3d4F272cEFd21D33126d') as `0x${string}`,
 };
 
 interface SwapCardProps {
@@ -197,7 +200,8 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const [txHash, setTxHash] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [useGasless, setUseGasless] = useState(true);
-    const [swapMode, setSwapMode] = useState<'gasless' | 'standard'>('gasless');
+    const [swapMode, setSwapMode] = useState<'gasless' | 'standard' | 'circle'>('gasless');
+    const [destChainId, setDestChainId] = useState<number>(84532); // Default: Base Sepolia
 
     const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
@@ -207,6 +211,12 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
     // Yellow Network SDK Integration
     const yellow = useYellowNetwork();
+
+    // Circle Wallet Integration
+    const circleWallet = useCircleWallet();
+
+    // LI.FI SDK Integration
+    const lifi = useLiFi();
 
     // Check for "Zombie" sessions (Expired but still marked Active in storage)
     const { data: sessionData, refetch: refetchSession } = useReadContract({
@@ -348,7 +358,72 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         setErrorMsg(null);
         setTxHash(null);
 
-        // Determine chain based on mode
+        // ================== LI.FI SDK CROSS-CHAIN MODE ==================
+        if (swapMode === 'standard') {
+            console.log('🌉 Using LI.FI SDK for cross-chain swap');
+            
+            try {
+                setStep('approving');  // Getting quote
+                
+                // Determine source token based on current chain
+                const sourceChain = chainId || 11155111; // Default to Sepolia
+                const sourceTokenAddress = sourceChain === 11155111 
+                    ? TEST_TOKENS.SEPOLIA.USDC 
+                    : '0x0000000000000000000000000000000000000000'; // Native token as fallback
+                
+                // Destination token on target chain
+                const destTokenAddress = destChainId === 84532
+                    ? TEST_TOKENS.BASE_SEPOLIA.USDC
+                    : '0x0000000000000000000000000000000000000000'; // Native token as fallback
+                
+                const amountInWei = parseUnits(amount, 6); // USDC has 6 decimals
+                
+                // Get LI.FI quote
+                console.log('📊 Getting LI.FI quote...', {
+                    fromChain: sourceChain,
+                    toChain: destChainId,
+                    fromToken: sourceTokenAddress,
+                    toToken: destTokenAddress,
+                    amount: amountInWei.toString(),
+                });
+                
+                await lifi.getQuote({
+                    fromChain: sourceChain,
+                    toChain: destChainId,
+                    fromToken: sourceTokenAddress,
+                    toToken: destTokenAddress,
+                    fromAmount: amountInWei.toString(),
+                    fromAddress: address,
+                    toAddress: recipient as `0x${string}`,
+                });
+                
+                if (!lifi.quote) {
+                    setErrorMsg('Failed to get quote from LI.FI. Try different chains or amounts.');
+                    setStep('error');
+                    return;
+                }
+                
+                console.log('✅ Quote received, executing swap...');
+                setStep('swapping');
+                
+                // Execute the swap using LI.FI SDK
+                const txHash = await lifi.executeSwap();
+                
+                console.log('✅ LI.FI swap completed:', txHash);
+                setTxHash(txHash as `0x${string}`);
+                setStep('success');
+                return; // Exit early, LI.FI handled everything
+                
+            } catch (error: any) {
+                console.error('❌ LI.FI swap error:', error);
+                setErrorMsg(`LI.FI swap failed: ${error.message || 'Unknown error'}`);
+                setStep('error');
+                return;
+            }
+        }
+        // ===============================================================
+
+        // Determine chain based on mode (for Yellow/Circle modes)
         const targetChainId = isFundBroker ? 11155111 : 5042002; // Sepolia or Arc
 
         // Ensure network before starting
@@ -362,46 +437,56 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         }
 
         try {
-            const amountInWei = parseUnits(amount, 18);
+            const amountInWei = parseUnits(amount, 6);
             const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
 
             // Pre-validation: Check if user has enough tokens
             if (tokenBalance && amountInWei > (tokenBalance as bigint)) {
-                setErrorMsg(`Insufficient ${sourceToken} balance. You have ${formatEther(tokenBalance as bigint)} but trying to swap ${amount}.`);
+                setErrorMsg(`Insufficient ${sourceToken} balance. You have ${formatUnits(tokenBalance as bigint, 6)} but trying to swap ${amount}.`);
                 setStep('error');
                 return;
             }
 
-            // Check existing allowance - skip approval if already sufficient
-            const currentAllowance = await publicClient.readContract({
-                address: tokenAddress,
-                abi: ERC20_ABI,
-                functionName: 'allowance',
-                args: [address, CONTRACTS.LIFI_ROUTER],
-            }) as bigint;
+            // Step 1: Token Approval (ONLY for standard LI.FI flow, NOT for Yellow Network)
+            // Yellow Network uses off-chain state channels and doesn't need LI.FI contract approval
+            if (!useGasless || !yellow.isReady) {
+                // Standard LI.FI flow requires approval
+                setStep('approving');
 
-            console.log('Current allowance:', currentAllowance.toString());
-
-            if (currentAllowance < amountInWei) {
-                // Need to approve - use exact amount
-                console.log('Approving tokens for LI.FI...');
-                const approveHash = await writeContractAsync({
+                // Check existing allowance - skip approval if already sufficient
+                const currentAllowance = await publicClient.readContract({
                     address: tokenAddress,
                     abi: ERC20_ABI,
-                    functionName: 'approve',
-                    args: [CONTRACTS.LIFI_ROUTER, amountInWei],
-                });
-                console.log('Approval tx:', approveHash);
+                    functionName: 'allowance',
+                    args: [address, CONTRACTS.LIFI_ROUTER],
+                }) as bigint;
 
-                // Wait for approval confirmation
-                await publicClient.waitForTransactionReceipt({
-                    hash: approveHash,
-                    timeout: 120_000,
-                    pollingInterval: 2_000,
-                });
-                console.log('Approval confirmed');
+                console.log('Current allowance:', currentAllowance.toString());
+
+                if (currentAllowance < amountInWei) {
+                    // Need to approve - use exact amount
+                    console.log('Approving tokens for LI.FI...');
+                    const approveHash = await writeContractAsync({
+                        address: tokenAddress,
+                        abi: ERC20_ABI,
+                        functionName: 'approve',
+                        args: [CONTRACTS.LIFI_ROUTER, amountInWei],
+                    });
+                    console.log('Approval tx:', approveHash);
+
+                    // Wait for approval confirmation
+                    await publicClient.waitForTransactionReceipt({
+                        hash: approveHash,
+                        timeout: 120_000,
+                        pollingInterval: 2_000,
+                    });
+                    console.log('Approval confirmed');
+                } else {
+                    console.log('Sufficient allowance exists, skipping approval ⚡');
+                }
             } else {
-                console.log('Sufficient allowance exists, skipping approval ⚡');
+                // Yellow Network gasless mode - NO approval needed!
+                console.log('⚡ Yellow Network mode: Skipping approval (state channels don\'t need it)');
             }
 
             // Step 2: Execute cross-chain swap
@@ -420,22 +505,21 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 console.log("   Session ID:", yellow.sessionId);
 
                 try {
-                    // The Yellow SDK sendPayment uses state channels for instant, gasless transfers
+                    // Send real Yellow Network transfer using state channel
                     // This happens OFF-CHAIN in the Yellow Network clearing layer
                     await yellow.sendPayment(
                         amountInWei.toString(),
                         recipient as `0x${string}`
                     );
 
-                    console.log("✅ Yellow Network payment sent (GASLESS - no blockchain tx!)");
+                    console.log("✅ Yellow Network payment confirmed (GASLESS - no blockchain tx!)");
 
-                    // For Yellow SDK, there's no on-chain hash immediately
-                    // The transaction is settled off-chain in the state channel
+                    // For Yellow Network, use session ID as identifier (no on-chain hash)
                     swapHash = `yellow-offchain-${Date.now()}` as `0x${string}`;
 
                     // Show success with Yellow Network badge
                     setStep('success');
-                    alert('✅ Gasless payment sent via Yellow Network! The transaction was processed off-chain using state channels - no gas fees!');
+                    alert('✅ Real Yellow Network transfer completed! The transaction was processed off-chain using state channels - no gas fees!');
 
                 } catch (yellowError: any) {
                     console.error("Yellow SDK payment failed:", yellowError);
@@ -521,7 +605,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
     const handleMaxClick = () => {
         if (tokenBalance) {
-            setAmount(formatEther(tokenBalance as bigint));
+            setAmount(formatUnits(tokenBalance as bigint, 6));
         }
     };
 
@@ -568,6 +652,48 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
     return (
         <div className="glass-card p-6 w-full max-w-md">
+            {/* Mode Toggle - At Top */}
+            {isConnected && (
+                <div className="mb-6 flex items-center justify-center gap-1.5 p-1.5 bg-gray-800/50 rounded-lg border border-gray-700">
+                    <button
+                        onClick={() => { setSwapMode('gasless'); setUseGasless(true); }}
+                        className={`flex-1 px-3 py-2.5 rounded-md text-sm font-medium transition-all ${swapMode === 'gasless'
+                            ? 'bg-yellow-500/30 text-yellow-300 border border-yellow-500/50 shadow-lg shadow-yellow-500/20'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/30'
+                            }`}
+                    >
+                        <div className="flex items-center justify-center gap-2">
+                            <span>⚡</span>
+                            <span>Yellow Network</span>
+                        </div>
+                    </button>
+                    <button
+                        onClick={() => { setSwapMode('standard'); setUseGasless(false); }}
+                        className={`flex-1 px-3 py-2.5 rounded-md text-sm font-medium transition-all ${swapMode === 'standard'
+                            ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-500/50 shadow-lg shadow-indigo-500/20'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/30'
+                            }`}
+                    >
+                        <div className="flex items-center justify-center gap-2">
+                            <span>⛽</span>
+                            <span>LI.FI</span>
+                        </div>
+                    </button>
+                    <button
+                        onClick={() => { setSwapMode('circle'); setUseGasless(false); }}
+                        className={`flex-1 px-3 py-2.5 rounded-md text-sm font-medium transition-all ${swapMode === 'circle'
+                            ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50 shadow-lg shadow-blue-500/20'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/30'
+                            }`}
+                    >
+                        <div className="flex items-center justify-center gap-2">
+                            <span>🔵</span>
+                            <span>Circle</span>
+                        </div>
+                    </button>
+                </div>
+            )}
+
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold">
@@ -579,187 +705,532 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </div>
             </div>
 
-            {/* Mode Toggle */}
-            {isConnected && (
-                <div className="mb-4 flex items-center justify-center gap-2 p-2 bg-gray-800/50 rounded-lg">
-                    <button
-                        onClick={() => { setSwapMode('gasless'); setUseGasless(true); }}
-                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${swapMode === 'gasless'
-                            ? 'bg-yellow-500/30 text-yellow-300 border border-yellow-500/50'
-                            : 'text-gray-400 hover:text-gray-200'
-                            }`}
-                    >
-                        ⚡ Yellow Gasless
-                    </button>
-                    <button
-                        onClick={() => { setSwapMode('standard'); setUseGasless(false); }}
-                        className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-all ${swapMode === 'standard'
-                            ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-500/50'
-                            : 'text-gray-400 hover:text-gray-200'
-                            }`}
-                    >
-                        ⛽ Standard (LI.FI)
-                    </button>
-                </div>
-            )}
-
-            {/* Yellow Network SDK Status */}
+            {/* Yellow Network SDK Status - Enhanced UI */}
             {useGasless && isConnected && (
-                <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-                    <div className="flex items-center justify-between">
+                <div className="mb-4 p-4 bg-gradient-to-br from-yellow-500/10 via-yellow-500/5 to-amber-500/10 border border-yellow-500/30 rounded-lg">
+                    {/* Header with Authentication Status */}
+                    <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-2">
-                            <span className="text-yellow-400">⚡</span>
-                            <span className="text-sm text-yellow-200">Yellow Network</span>
-                            {yellow.isLoading && (
-                                <span className="text-xs text-yellow-500 animate-pulse">Loading...</span>
+                            <div className="w-6 h-6 bg-gradient-to-br from-yellow-500 to-amber-500 rounded-full flex items-center justify-center">
+                                <span className="text-white text-xs font-bold">⚡</span>
+                            </div>
+                            <span className="text-sm font-medium text-yellow-200">Yellow Network</span>
+                            {yellow.session.environment && (
+                                <span className="text-xs px-2 py-0.5 bg-gray-700/50 rounded text-gray-300 border border-gray-600">
+                                    {yellow.session.environment}
+                                </span>
                             )}
                         </div>
-                        {yellow.session.state === 'session_ready' ? (
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-emerald-400">
-                                    ✓ Session Ready
-                                </span>
-                                <button
-                                    onClick={yellow.closeSession}
-                                    className="text-xs px-2 py-1 bg-gray-500/20 hover:bg-gray-500/30 rounded text-gray-300"
-                                >
-                                    Close
-                                </button>
-                            </div>
-                        ) : yellow.session.state === 'authenticated' ? (
-                            <div className="flex flex-col gap-2">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xs text-emerald-400">✓ Authenticated</span>
-                                    <button
-                                        onClick={yellow.requestTestTokens}
-                                        disabled={yellow.isLoading}
-                                        className="text-xs px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-blue-300 disabled:opacity-50"
-                                        title="Get ytest.usd tokens from Yellow Network faucet"
-                                    >
-                                        Get Tokens
-                                    </button>
-                                </div>
-
-                                {/* Channel Creation Buttons */}
-                                {!yellow.hasPendingChannel && !yellow.channelTxHash && (
-                                    <button
-                                        onClick={async () => {
-                                            await yellow.requestChannelCreation();
-                                        }}
-                                        disabled={yellow.isLoading}
-                                        className="w-full px-3 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all"
-                                    >
-                                        {yellow.isLoading ? '⏳ Processing...' : '📡 Request Channel (WebSocket)'}
-                                    </button>
-                                )}
-
-                                {yellow.hasPendingChannel && (
-                                    <button
-                                        onClick={async () => {
-                                            const hash = await yellow.createChannelOnChain();
-                                            if (hash) {
-                                                alert(`🎉 ON-CHAIN CHANNEL CREATED!\n\nTX Hash: ${hash}\n\nView on Etherscan: https://sepolia.etherscan.io/tx/${hash}`);
-                                            }
-                                        }}
-                                        disabled={yellow.isLoading}
-                                        className="w-full px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all animate-pulse"
-                                    >
-                                        {yellow.isLoading ? '⏳ Submitting...' : '🔗 Create Channel ON-CHAIN (TX Proof!)'}
-                                    </button>
-                                )}
-
-                                {yellow.channelTxHash && (
-                                    <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
-                                        <span className="text-emerald-500/80 block mb-1">✅ Channel Created On-Chain!</span>
-                                        <a
-                                            href={`https://sepolia.etherscan.io/tx/${yellow.channelTxHash}`}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="text-emerald-300 hover:text-emerald-200 hover:underline break-all font-mono text-xs"
-                                        >
-                                            {yellow.channelTxHash.slice(0, 10)}...{yellow.channelTxHash.slice(-8)} →
-                                        </a>
-                                    </div>
-                                )}
-
-                                <p className="text-xs text-gray-500">Uses NitroliteClient for verifiable on-chain proof</p>
+                        
+                        {/* Authentication Icon with Green Tick */}
+                        {yellow.session.state === 'authenticated' || yellow.session.state === 'session_ready' ? (
+                            <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/20 rounded border border-emerald-500/30">
+                                <span className="text-emerald-400 text-sm">✓</span>
+                                <span className="text-emerald-300 text-xs font-medium">Authenticated</span>
                             </div>
                         ) : yellow.session.state === 'authenticating' ? (
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-yellow-400 animate-pulse">🔐 Signing...</span>
-                                <span className="text-xs text-gray-400">(Check wallet)</span>
-                            </div>
-                        ) : yellow.session.state === 'connecting' || yellow.session.state === 'connected' ? (
-                            <span className="text-xs text-yellow-400 animate-pulse">
-                                Connecting...
-                            </span>
-                        ) : yellow.session.state === 'error' ? (
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs text-red-400">
-                                    ⚠ {yellow.error?.slice(0, 25) || 'Error'}
-                                </span>
-                                <button
-                                    onClick={yellow.connect}
-                                    className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300"
-                                >
-                                    Retry
-                                </button>
+                            <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/20 rounded border border-yellow-500/30 animate-pulse">
+                                <span className="text-yellow-400 text-xs">🔐</span>
+                                <span className="text-yellow-300 text-xs">Signing...</span>
                             </div>
                         ) : (
-                            <button
-                                onClick={yellow.connect}
-                                disabled={yellow.isLoading}
-                                className="text-xs px-2 py-1 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300 disabled:opacity-50"
-                            >
-                                Connect
-                            </button>
+                            <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-500/20 rounded border border-gray-600">
+                                <span className="text-gray-400 text-xs">○</span>
+                                <span className="text-gray-400 text-xs">Not Authenticated</span>
+                            </div>
                         )}
                     </div>
 
-                    {/* Session Details */}
-                    {yellow.session.sessionId && (
-                        <div className="mt-3 pt-2 border-t border-yellow-500/20 space-y-2 text-xs">
-                            <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                    <span className="text-yellow-500/60 block">Status</span>
-                                    <span className="text-yellow-200 capitalize">{yellow.session.state.replace('_', ' ')}</span>
+                    {/* State-based Content */}
+                    {yellow.session.state === 'session_ready' ? (
+                        /* CHANNEL IS ACTIVE - Show Channel Info */
+                        <div className="space-y-3">
+                            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <span className="text-emerald-400 text-lg">✓</span>
+                                    <span className="text-emerald-300 font-medium">Channel Active</span>
                                 </div>
-                                <div className="text-right">
-                                    <span className="text-yellow-500/60 block">Off-Chain Balance</span>
-                                    <span className="text-emerald-300 font-mono">
+                                <p className="text-emerald-200/80 text-xs">Your Yellow Network state channel is open and ready for gasless transactions!</p>
+                            </div>
+
+                            {/* Channel On-Chain Transaction Hash */}
+                            {(yellow.session.channelOpenHash || yellow.channelTxHash) && (
+                                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded">
+                                    <span className="text-blue-400 text-xs font-medium block mb-2">🔗 Channel Creation TX Hash</span>
+                                    <a
+                                        href={`https://sepolia.etherscan.io/tx/${yellow.session.channelOpenHash || yellow.channelTxHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-blue-300 hover:text-blue-200 hover:underline break-all font-mono text-xs block"
+                                    >
+                                        {(yellow.session.channelOpenHash || yellow.channelTxHash || '').slice(0, 20)}...{(yellow.session.channelOpenHash || yellow.channelTxHash || '').slice(-20)}
+                                    </a>
+                                    <p className="text-xs text-blue-400/60 mt-1.5">✓ Verified on Sepolia Etherscan</p>
+                                </div>
+                            )}
+
+                            {/* Off-Chain Balance */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="p-2 bg-gray-800/50 rounded border border-gray-700">
+                                    <span className="text-gray-400 text-xs block mb-1">Status</span>
+                                    <span className="text-emerald-300 text-sm font-medium">Active</span>
+                                </div>
+                                <div className="p-2 bg-gray-800/50 rounded border border-gray-700">
+                                    <span className="text-gray-400 text-xs block mb-1">Off-Chain Balance</span>
+                                    <span className="text-emerald-300 font-mono text-sm">
                                         {yellow.session.balanceRaw
                                             ? `${(Number(yellow.session.balanceRaw) / Math.pow(10, yellow.session.balanceDecimals || 6)).toFixed(2)} ${yellow.session.balanceSymbol || 'TEST'}`
                                             : '0.00 TEST'}
                                     </span>
-                                    {yellow.session.isSimulated && (
-                                        <span className="text-xs text-orange-400 block mt-1">
-                                            ⚠️ Sandbox simulation
-                                        </span>
-                                    )}
                                 </div>
                             </div>
-                            {/* Channel Open Hash - On-Chain Proof */}
-                            {(yellow.session.channelOpenHash || yellow.depositHash) && (
-                                <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
-                                    <span className="text-emerald-500/80 block mb-1">🔗 Deposit TX (On-Chain Proof)</span>
-                                    <a
-                                        href={`https://sepolia.etherscan.io/tx/${yellow.session.channelOpenHash || yellow.depositHash}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-emerald-300 hover:text-emerald-200 hover:underline break-all font-mono"
-                                    >
-                                        {(yellow.session.channelOpenHash || yellow.depositHash || '').slice(0, 10)}...{(yellow.session.channelOpenHash || yellow.depositHash || '').slice(-8)} →
-                                    </a>
-                                    <p className="text-xs text-emerald-400/60 mt-1">✓ Verified on Sepolia Etherscan</p>
+
+                            {/* Action Buttons */}
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={async () => {
+                                        if (confirm('Close channel and withdraw funds back to your wallet on-chain? This will cost gas.')) {
+                                            try {
+                                                const txHash = await yellow.closeChannel();
+                                                if (txHash) {
+                                                    alert(`✅ Channel closed!\n\nTX: ${txHash}\n\nFunds withdrawn to your wallet.`);
+                                                }
+                                            } catch (error) {
+                                                alert(`Failed to close channel: ${error instanceof Error ? error.message : String(error)}`);
+                                            }
+                                        }
+                                    }}
+                                    disabled={yellow.isLoading}
+                                    className="flex-1 px-3 py-2 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300 text-xs font-medium border border-red-500/30 disabled:opacity-50 transition"
+                                    title="Close channel and withdraw funds on-chain"
+                                >
+                                    {yellow.isLoading ? '⏳ Closing...' : '💰 Withdraw & Close'}
+                                </button>
+                                <button
+                                    onClick={yellow.closeSession}
+                                    className="px-3 py-2 bg-gray-500/20 hover:bg-gray-500/30 rounded text-gray-300 text-xs font-medium border border-gray-600 transition"
+                                >
+                                    Disconnect
+                                </button>
+                            </div>
+                        </div>
+                    ) : yellow.session.state === 'authenticated' ? (
+                        /* AUTHENTICATED BUT NO CHANNEL - Show Create Channel Button */
+                        <div className="space-y-3">
+                            {/* Info Message */}
+                            <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded">
+                                <div className="flex items-start gap-2">
+                                    <span className="text-blue-400">💡</span>
+                                    <div>
+                                        <p className="text-blue-300 text-sm font-medium mb-1">Ready to Create Channel</p>
+                                        <p className="text-blue-400/80 text-xs">
+                                            Create a state channel to enable instant, gasless transactions on Yellow Network.
+                                        </p>
+                                    </div>
                                 </div>
-                            )}
+                            </div>
+
+                            {/* Channel Creation Flow */}
+                            {!yellow.hasPendingChannel && !yellow.channelTxHash ? (
+                                /* Step 1: Request Channel via WebSocket */
+                                <button
+                                    onClick={async () => {
+                                        await yellow.requestChannelCreation();
+                                    }}
+                                    disabled={yellow.isLoading}
+                                    className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all shadow-lg"
+                                >
+                                    {yellow.isLoading ? '⏳ Processing...' : '🚀 Create Channel'}
+                                </button>
+                            ) : yellow.hasPendingChannel ? (
+                                /* Step 2: Submit to Blockchain */
+                                <div className="space-y-2">
+                                    <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300">
+                                        <span className="font-medium">⚡ Channel Ready - </span>
+                                        <span>Submit to blockchain for on-chain proof</span>
+                                    </div>
+                                    <button
+                                        onClick={async () => {
+                                            await yellow.createChannelOnChain();
+                                        }}
+                                        disabled={yellow.isLoading}
+                                        className="w-full px-4 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all animate-pulse shadow-lg"
+                                    >
+                                        {yellow.isLoading ? '⏳ Submitting...' : '🔗 Submit to Blockchain'}
+                                    </button>
+                                </div>
+                            ) : yellow.channelTxHash ? (
+                                /* Channel Created - Show Transaction Hash */
+                                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className="text-emerald-400 text-lg">✓</span>
+                                        <span className="text-emerald-300 font-medium">Channel Created!</span>
+                                    </div>
+                                    <div className="mb-2">
+                                        <span className="text-emerald-400/80 text-xs block mb-1">Transaction Hash:</span>
+                                        <a
+                                            href={`https://sepolia.etherscan.io/tx/${yellow.channelTxHash}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-emerald-300 hover:text-emerald-200 hover:underline break-all font-mono text-xs block"
+                                        >
+                                            {yellow.channelTxHash}
+                                        </a>
+                                    </div>
+                                    <p className="text-emerald-400/60 text-xs">✓ Verified on Sepolia - Check Etherscan for details</p>
+                                </div>
+                            ) : null}
+
+                            <p className="text-xs text-gray-500 text-center">Powered by NitroliteClient SDK</p>
+                        </div>
+                    ) : yellow.session.state === 'authenticating' ? (
+                        /* AUTHENTICATING STATE */
+                        <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                            <div className="flex items-center gap-2">
+                                <span className="text-yellow-400 animate-pulse">🔐</span>
+                                <span className="text-yellow-300 text-sm">Signing authentication...</span>
+                                <span className="text-xs text-gray-400 ml-auto">(Check wallet)</span>
+                            </div>
+                        </div>
+                    ) : yellow.session.state === 'connected' ? (
+                        /* CONNECTED BUT NOT AUTHENTICATED - Show Authenticate Button */
+                        <div className="space-y-3">
+                            <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded">
+                                <div className="flex items-start gap-2">
+                                    <span className="text-blue-400">✓</span>
+                                    <div>
+                                        <p className="text-blue-300 text-sm font-medium mb-1">Connected to Yellow Network</p>
+                                        <p className="text-blue-400/80 text-xs">
+                                            Now authenticate to access gasless transactions
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={yellow.authenticate}
+                                disabled={yellow.isLoading}
+                                className="w-full px-4 py-3 bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-500 hover:to-amber-500 rounded-lg text-white text-sm font-medium disabled:opacity-50 transition-all shadow-lg"
+                            >
+                                {yellow.isLoading ? '⏳ Authenticating...' : '🔐 Authenticate (Sign Message)'}
+                            </button>
+                        </div>
+                    ) : yellow.session.state === 'connecting' ? (
+                        /* CONNECTING STATE */
+                        <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                            <div className="flex items-center gap-2 justify-center">
+                                <span className="text-yellow-400 animate-pulse">⚡</span>
+                                <span className="text-yellow-300 text-sm">Connecting to Yellow Network...</span>
+                            </div>
+                        </div>
+                    ) : yellow.session.state === 'error' ? (
+                        /* ERROR STATE */
+                        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded">
+                            <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-red-400">⚠</span>
+                                    <span className="text-red-300 text-sm">
+                                        {yellow.error?.slice(0, 40) || 'Connection Error'}...
+                                    </span>
+                                </div>
+                                <button
+                                    onClick={yellow.connect}
+                                    className="px-3 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300 text-xs font-medium border border-red-500/30 transition"
+                                >
+                                    Retry
+                                </button>
+                            </div>
+                        </div>
+                    ) : (
+                        /* DISCONNECTED STATE - Show Connect Button */
+                        <div className="space-y-3">
+                            <div className="p-3 bg-gray-800/50 border border-gray-700 rounded">
+                                <p className="text-gray-300 text-sm mb-2">Connect to Yellow Network for gasless transactions</p>
+                                <button
+                                    onClick={yellow.connect}
+                                    disabled={yellow.isLoading}
+                                    className="w-full px-4 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300 text-sm font-medium border border-yellow-500/30 disabled:opacity-50 transition"
+                                >
+                                    {yellow.isLoading ? '⏳ Connecting...' : '⚡ Connect to Yellow Network'}
+                                </button>
+                            </div>
                         </div>
                     )}
 
-                    {/* SDK Info */}
-                    <div className="mt-2 text-xs text-yellow-500/70 flex items-center justify-between">
-                        <span>SDK: @erc7824/nitrolite • State Channels</span>
-                        <span className="capitalize">{yellow.session.state}</span>
+                    {/* Footer */}
+                    <div className="mt-3 pt-2 border-t border-yellow-500/20 text-xs text-yellow-500/60 text-center">
+                        Yellow Network • State Channel • @erc7824/nitrolite
+                    </div>
+                </div>
+            )}
+
+            {/* Circle Wallet Status Panel - Real Embedded Wallet */}
+            {swapMode === 'circle' && isConnected && (
+                <div className="mb-4 p-4 bg-gradient-to-br from-blue-500/10 via-blue-500/5 to-purple-500/10 border border-blue-500/30 rounded-lg">
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 bg-gradient-to-br from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
+                                <span className="text-white text-xs font-bold">🔵</span>
+                            </div>
+                            <span className="text-sm font-medium text-blue-200">Circle Embedded Wallet</span>
+                            {circleWallet.isLoading && (
+                                <span className="text-xs text-blue-400 animate-pulse">⏳</span>
+                            )}
+                        </div>
+                        {circleWallet.isConnected ? (
+                            <button
+                                onClick={circleWallet.disconnect}
+                                className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300 border border-red-500/30 transition"
+                            >
+                                Disconnect
+                            </button>
+                        ) : (
+                            <button
+                                onClick={circleWallet.connect}
+                                disabled={circleWallet.isLoading}
+                                className="text-xs px-3 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-blue-300 border border-blue-500/30 disabled:opacity-50 transition"
+                            >
+                                {circleWallet.isLoading ? 'Connecting...' : 'Connect Wallet'}
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Not Connected Help Message */}
+                    {!circleWallet.isConnected && !circleWallet.isLoading && (
+                        <div className="p-3 bg-blue-500/5 border border-blue-500/20 rounded text-xs">
+                            <div className="flex items-start gap-2">
+                                <span>💡</span>
+                                <div>
+                                    <p className="font-medium text-blue-200 mb-1">Embedded Web3 Wallet</p>
+                                    <p className="text-blue-400/80">
+                                        Circle Wallet is a fully embedded Web3 wallet with real private key management. 
+                                        No browser extension needed! Switch networks, sign transactions, and use Yellow + LI.FI seamlessly.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Error Display */}
+                    {circleWallet.error && (
+                        <div className="mt-2 p-3 bg-red-500/10 border border-red-500/30 rounded text-xs">
+                            <div className="flex items-start gap-2">
+                                <span className="text-red-400">⚠️</span>
+                                <div className="flex-1">
+                                    <p className="text-red-300 font-medium mb-1">Error</p>
+                                    <p className="text-red-400/80">{circleWallet.error}</p>
+                                    <button
+                                        onClick={circleWallet.connect}
+                                        className="mt-2 text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300 border border-red-500/30"
+                                    >
+                                        Retry Connection
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Connected Wallet Info */}
+                    {circleWallet.isConnected && circleWallet.address && (
+                        <div className="space-y-3">
+                            {/* Address & Network Row */}
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20">
+                                    <span className="text-blue-500/60 text-xs block mb-1">Wallet Address</span>
+                                    <span className="text-blue-200 font-mono text-xs">
+                                        {circleWallet.address.slice(0, 10)}...{circleWallet.address.slice(-8)}
+                                    </span>
+                                </div>
+                                <div className="p-2 bg-purple-500/10 rounded border border-purple-500/20">
+                                    <span className="text-purple-500/60 text-xs block mb-1">Network</span>
+                                    <span className="text-purple-200 text-xs font-medium">
+                                        {circleWallet.chainName || 'Unknown'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Balance */}
+                            <div className="p-3 bg-emerald-500/10 rounded border border-emerald-500/20">
+                                <span className="text-emerald-500/60 text-xs block mb-1">Native Balance</span>
+                                <div className="flex items-baseline gap-2">
+                                    <span className="text-emerald-200 text-lg font-mono font-bold">
+                                        {circleWallet.balance ? parseFloat(circleWallet.balance).toFixed(4) : '0.0000'}
+                                    </span>
+                                    <span className="text-emerald-400/60 text-xs">
+                                        {circleWallet.chainId === 11155111 ? 'ETH' : 'ARC'}
+                                    </span>
+                                </div>
+                                <button
+                                    onClick={circleWallet.refreshBalance}
+                                    className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition"
+                                >
+                                    🔄 Refresh Balance
+                                </button>
+                            </div>
+
+                            {/* Network Switcher */}
+                            <div className="p-3 bg-gray-800/50 rounded border border-gray-700">
+                                <span className="text-gray-400 text-xs block mb-2">Switch Network</span>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => circleWallet.switchNetwork(11155111)}
+                                        disabled={circleWallet.chainId === 11155111 || circleWallet.isLoading}
+                                        className={`flex-1 px-3 py-2 rounded text-xs font-medium transition ${
+                                            circleWallet.chainId === 11155111
+                                                ? 'bg-blue-500 text-white border-2 border-blue-400'
+                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-300 border border-gray-600'
+                                        } disabled:opacity-50`}
+                                    >
+                                        {circleWallet.chainId === 11155111 ? '✓ ' : ''}Sepolia
+                                    </button>
+                                    <button
+                                        onClick={() => circleWallet.switchNetwork(5042002)}
+                                        disabled={circleWallet.chainId === 5042002 || circleWallet.isLoading}
+                                        className={`flex-1 px-3 py-2 rounded text-xs font-medium transition ${
+                                            circleWallet.chainId === 5042002
+                                                ? 'bg-purple-500 text-white border-2 border-purple-400'
+                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-300 border border-gray-600'
+                                        } disabled:opacity-50`}
+                                    >
+                                        {circleWallet.chainId === 5042002 ? '✓ ' : ''}Arc Testnet
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Features */}
+                            <div className="flex flex-wrap gap-1.5">
+                                <span className="px-2 py-1 bg-yellow-500/10 text-yellow-400 rounded text-[10px] border border-yellow-500/20 font-medium">
+                                    ⚡ Yellow Network Ready
+                                </span>
+                                <span className="px-2 py-1 bg-purple-500/10 text-purple-400 rounded text-[10px] border border-purple-500/20 font-medium">
+                                    🌉 LI.FI Bridge Ready
+                                </span>
+                                <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 rounded text-[10px] border border-emerald-500/20 font-medium">
+                                    🔐 Self-Custody
+                                </span>
+                            </div>
+
+                            {/* Private Key Warning */}
+                            <div className="mt-2 p-2 bg-orange-500/10 border border-orange-500/20 rounded text-xs">
+                                <div className="flex items-start gap-2">
+                                    <span className="text-orange-400">⚠️</span>
+                                    <p className="text-orange-300/80">
+                                        Your private key is stored locally in your browser. Never share it with anyone!
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Footer */}
+                    <div className="mt-3 pt-2 border-t border-blue-500/20 text-xs text-blue-500/60 text-center">
+                        Circle Programmable Wallets • Powered by Viem
+                    </div>
+                </div>
+            )}
+
+            {/* LI.FI Cross-Chain SDK Interface */}
+            {swapMode === 'standard' && isConnected && (
+                <div className="mb-4 p-4 bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-pink-500/10 border border-indigo-500/30 rounded-lg">
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full flex items-center justify-center">
+                                <span className="text-white text-xs font-bold">⛓️</span>
+                            </div>
+                            <span className="text-sm font-medium text-indigo-200">LI.FI Cross-Chain Bridge</span>
+                        </div>
+                        {lifi.quote && (
+                            <span className="text-xs px-2 py-0.5 bg-emerald-500/20 rounded text-emerald-300 border border-emerald-500/30">
+                                Quote Ready
+                            </span>
+                        )}
+                    </div>
+
+                    {/* Destination Chain Selector */}
+                    <div className="mb-3">
+                        <label className="text-xs text-gray-400 mb-1.5 block">Destination Chain</label>
+                        <select
+                            value={destChainId}
+                            onChange={(e) => setDestChainId(Number(e.target.value))}
+                            className="w-full px-3 py-2 bg-gray-800/50 border border-indigo-500/30 rounded text-sm text-white focus:outline-none focus:border-indigo-400"
+                        >
+                            {Object.values(SUPPORTED_CHAINS).map((chain) => (
+                                <option key={chain.id} value={chain.id}>
+                                    {chain.name} (Chain ID: {chain.id})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* Quote Display */}
+                    {lifi.quote && (
+                        <div className="mb-3 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded">
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div>
+                                    <span className="text-gray-400 block mb-1">You'll Receive</span>
+                                    <span className="text-indigo-300 font-mono">
+                                        {(Number(lifi.quote.toAmount) / 1e6).toFixed(2)} Tokens
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-400 block mb-1">Est. Time</span>
+                                    <span className="text-indigo-300">
+                                        ~{Math.ceil(lifi.quote.estimatedTime / 60)}m
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-400 block mb-1">Routes Found</span>
+                                    <span className="text-indigo-300">{lifi.quote.routes.length} available</span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-400 block mb-1">Est. Gas</span>
+                                    <span className="text-indigo-300">${lifi.quote.estimatedGas}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Status Messages */}
+                    {lifi.isLoadingQuote && (
+                        <div className="mb-3 p-2 bg-blue-500/10 rounded text-xs text-blue-300 flex items-center gap-2">
+                            <span className="animate-spin">⏳</span>
+                            <span>Fetching best cross-chain routes...</span>
+                        </div>
+                    )}
+
+                    {lifi.isExecuting && (
+                        <div className="mb-3 p-2 bg-yellow-500/10 rounded text-xs text-yellow-300 flex items-center gap-2">
+                            <span className="animate-pulse">⚡</span>
+                            <span>{lifi.executionStatus || 'Executing swap...'}</span>
+                        </div>
+                    )}
+
+                    {lifi.error && (
+                        <div className="mb-3 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300">
+                            ⚠️ {lifi.error}
+                        </div>
+                    )}
+
+                    {lifi.txHash && (
+                        <div className="mb-3 p-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                            <span className="text-xs text-emerald-300 block mb-1">✅ Transaction Hash</span>
+                            <a
+                                href={`https://scan.li.fi/tx/${lifi.txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-xs text-emerald-400 hover:underline break-all font-mono"
+                            >
+                                {lifi.txHash.slice(0, 20)}...{lifi.txHash.slice(-20)}
+                            </a>
+                        </div>
+                    )}
+
+                    {/* Info */}
+                    <div className="text-xs text-indigo-400/70 space-y-1">
+                        <p>• Swap tokens across multiple EVM chains</p>
+                        <p>• Powered by LI.FI SDK with best route optimization</p>
+                        <p>• Source Chain: {chainId === 11155111 ? 'Sepolia' : 'Current Network'}</p>
                     </div>
                 </div>
             )}
@@ -868,7 +1339,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 {isConnected && (
                                     <div className="text-xs flex gap-2 items-center">
                                         <span className="text-gray-500">
-                                            Balance: {tokenBalance ? parseFloat(formatEther(tokenBalance as bigint)).toFixed(2) : '0'} {sourceToken}
+                                            Balance: {tokenBalance ? parseFloat(formatUnits(tokenBalance as bigint, 6)).toFixed(2) : '0'} {sourceToken}
                                         </span>
                                         <button
                                             onClick={mintTestTokens}
@@ -1023,49 +1494,65 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             {/* Faucet for Testing */}
             {
                 isConnected && (
-                    <div className="mt-6 pt-6 border-t border-gray-800 text-center">
-                        <p className="text-xs text-gray-400 mb-2">Need test tokens?</p>
-                        <button
-                            onClick={async () => {
-                                if (!address || !publicClient) return;
-                                setStep('minting');
-                                const chainId = isFundBroker ? 11155111 : 5042002;
-                                try {
-                                    const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
-                                    const hash = await writeContractAsync({
-                                        address: tokenAddress,
-                                        abi: [
-                                            {
-                                                name: 'faucet',
-                                                type: 'function',
-                                                inputs: [],
-                                                outputs: [],
-                                                stateMutability: 'nonpayable'
-                                            }
-                                        ],
-                                        functionName: 'faucet',
-                                        args: [],
-                                    });
-                                    console.log('Mint tx:', hash);
-                                    await publicClient.waitForTransactionReceipt({
-                                        hash,
-                                        timeout: 120_000,
-                                        pollingInterval: 2_000,
-                                    });
-                                    alert("Minted 10000 test tokens successfully!");
-                                    refetchBalance();
-                                    setStep('idle');
-                                } catch (e) {
-                                    console.error(e);
-                                    alert("Faucet failed. Make sure you are on the correct network.");
-                                    setStep('idle');
-                                }
-                            }}
-                            disabled={step !== 'idle'}
-                            className="text-xs text-indigo-400 hover:text-indigo-300 underline disabled:opacity-50"
-                        >
-                            {step === 'minting' ? 'Minting... (Please Wait)' : `Mint 10000 ${isFundBroker ? 'INR' : 'AED'} Test Tokens`}
-                        </button>
+                    <div className="mt-6 pt-6 border-t border-gray-800">
+                        <p className="text-xs text-gray-400 mb-3 text-center">Need test tokens?</p>
+                        
+                        <div className="space-y-2">
+                            {/* INR/AED Token Faucet */}
+                            <button
+                                onClick={async () => {
+                                    if (!address || !publicClient) return;
+                                    setStep('minting');
+                                    const chainId = isFundBroker ? 11155111 : 5042002;
+                                    try {
+                                        const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
+                                        const hash = await writeContractAsync({
+                                            address: tokenAddress,
+                                            abi: [
+                                                {
+                                                    name: 'faucet',
+                                                    type: 'function',
+                                                    inputs: [],
+                                                    outputs: [],
+                                                    stateMutability: 'nonpayable'
+                                                }
+                                            ],
+                                            functionName: 'faucet',
+                                            args: [],
+                                        });
+                                        console.log('Mint tx:', hash);
+                                        await publicClient.waitForTransactionReceipt({
+                                            hash,
+                                            timeout: 120_000,
+                                            pollingInterval: 2_000,
+                                        });
+                                        alert("Minted 10000 test tokens successfully!");
+                                        refetchBalance();
+                                        setStep('idle');
+                                    } catch (e) {
+                                        console.error(e);
+                                        alert("Faucet failed. Make sure you are on the correct network.");
+                                        setStep('idle');
+                                    }
+                                }}
+                                disabled={step !== 'idle'}
+                                className="w-full px-4 py-2 bg-indigo-500/20 hover:bg-indigo-500/30 rounded text-indigo-300 text-xs font-medium border border-indigo-500/30 disabled:opacity-50 transition text-center"
+                            >
+                                {step === 'minting' ? '⏳ Minting... (Please Wait)' : `🪙 Mint 10000 ${isFundBroker ? 'INR' : 'AED'} Test Tokens`}
+                            </button>
+
+                            {/* Yellow Network Test Tokens */}
+                            {useGasless && yellow.isConnected && (
+                                <button
+                                    onClick={yellow.requestTestTokens}
+                                    disabled={yellow.isLoading || step !== 'idle'}
+                                    className="w-full px-4 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 rounded text-yellow-300 text-xs font-medium border border-yellow-500/30 disabled:opacity-50 transition text-center"
+                                    title="Get ytest.usd tokens from Yellow Network faucet"
+                                >
+                                    {yellow.isLoading ? '⏳ Requesting...' : '⚡ Get Yellow Network Test Tokens'}
+                                </button>
+                            )}
+                        </div>
                     </div>
                 )
             }
@@ -1075,7 +1562,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 <svg className="w-4 h-4 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                FEMA Compliant • KYC Verified • Yellow Network
+                FEMA Compliant • KYC Verified • Yellow Network • Circle Wallets
             </div>
         </div >
     );

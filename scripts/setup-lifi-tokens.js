@@ -1,9 +1,9 @@
 const hre = require("hardhat");
 
 async function main() {
-    const routerAddress = "0x07d28E89C6320D2cdb6f67585cC35EE9fA944667";
-    const inrAddress = "0x0F09aD4F62f6C592aDF35eF059a0B16f6Fe13010";
-    const aedAddress = "0x5865b9E57643E92DE466a49fA2ab6095A8320d9B";
+    const routerAddress = "0x518042288Ab2633AE7EA3d4F272cEFd21D33126d";
+    const inrAddress = "0xC6DADFdf4c046D0A91946351A0aceee261DcA517";
+    const aedAddress = "0x05016024652D0c947E5B49532e4287374720d3b2";
 
     console.log("Setting up supported tokens on LIFIRouter:", routerAddress);
 

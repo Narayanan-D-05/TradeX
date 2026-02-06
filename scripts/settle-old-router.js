@@ -51,12 +51,12 @@ async function main() {
             // Check INR balance
             const INR = await ethers.getContractAt("MockERC20", config.INR_STABLE);
             const inrBalance = await INR.balanceOf(OLD_LIFI_ROUTER);
-            console.log(`INR Balance in Router: ${ethers.formatEther(inrBalance)}`);
+            console.log(`INR Balance in Router: ${ethers.formatUnits(inrBalance, 6)}`);
             
             // Check AED balance
             const AED = await ethers.getContractAt("MockERC20", config.AED_STABLE);
             const aedBalance = await AED.balanceOf(OLD_LIFI_ROUTER);
-            console.log(`AED Balance in Router: ${ethers.formatEther(aedBalance)}`);
+            console.log(`AED Balance in Router: ${ethers.formatUnits(aedBalance, 6)}`);
             
             console.log("\n⚠️  If there are tokens stuck in the router, we need to:");
             console.log("1. Know the recipient address");

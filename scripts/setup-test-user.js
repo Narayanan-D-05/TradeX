@@ -20,7 +20,7 @@ async function main() {
     console.log("AED Token:", contracts.AED_STABLE);
 
     // Mint tokens using the public mint function
-    const mintAmount = hre.ethers.parseEther("100000");
+    const mintAmount = hre.ethers.parseUnits("100000", 6);
 
     console.log("\n📤 Minting 100,000 INR to deployer...");
     try {
@@ -59,8 +59,8 @@ async function main() {
     console.log("\n💰 Final Balances:");
     const inrBal = await inrToken.balanceOf(deployer.address);
     const aedBal = await aedToken.balanceOf(deployer.address);
-    console.log("  INR:", hre.ethers.formatEther(inrBal));
-    console.log("  AED:", hre.ethers.formatEther(aedBal));
+    console.log("  INR:", hre.ethers.formatUnits(inrBal, 6));
+    console.log("  AED:", hre.ethers.formatUnits(aedBal, 6));
 
     // Pre-approve router for convenience
     console.log("\n🔓 Pre-approving LIFI Router...");

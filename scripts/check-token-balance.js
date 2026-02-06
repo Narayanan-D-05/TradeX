@@ -31,23 +31,23 @@ async function main() {
     console.log("=== Balances for", recipientAddress, "===");
     const inrBalance = await inrToken.balanceOf(recipientAddress);
     const aedBalance = await aedToken.balanceOf(recipientAddress);
-    console.log("INR Balance:", hre.ethers.formatEther(inrBalance));
-    console.log("AED Balance:", hre.ethers.formatEther(aedBalance));
+    console.log("INR Balance:", hre.ethers.formatUnits(inrBalance, 6));
+    console.log("AED Balance:", hre.ethers.formatUnits(aedBalance, 6));
 
     console.log("\n=== Balances for LI.FI Router ===");
     const routerInrBalance = await inrToken.balanceOf(lifiRouter);
     const routerAedBalance = await aedToken.balanceOf(lifiRouter);
-    console.log("INR Balance:", hre.ethers.formatEther(routerInrBalance));
-    console.log("AED Balance:", hre.ethers.formatEther(routerAedBalance));
+    console.log("INR Balance:", hre.ethers.formatUnits(routerInrBalance, 6));
+    console.log("AED Balance:", hre.ethers.formatUnits(routerAedBalance, 6));
 
     // Test direct mint
     console.log("\n=== Testing Direct Mint ===");
     try {
-        const tx = await aedToken.mint(recipientAddress, hre.ethers.parseEther("100"));
+        const tx = await aedToken.mint(recipientAddress, hre.ethers.parseUnits("100", 6));
         await tx.wait();
         console.log("✅ Direct mint successful!");
         const newAedBalance = await aedToken.balanceOf(recipientAddress);
-        console.log("New AED Balance:", hre.ethers.formatEther(newAedBalance));
+        console.log("New AED Balance:", hre.ethers.formatUnits(newAedBalance, 6));
     } catch (error) {
         console.log("❌ Direct mint failed:", error.message);
     }
