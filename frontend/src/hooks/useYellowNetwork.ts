@@ -42,6 +42,7 @@ interface UseYellowNetworkReturn {
     depositToChannel: (amount: string) => Promise<string | null>; // Returns tx hash
     requestChannelCreation: () => Promise<void>; // Request channel via WebSocket
     createChannelOnChain: () => Promise<string | null>; // Submit to blockchain, returns tx hash
+    disableReconnect: () => void; // Disable auto-reconnect after swap success
 
     // Info
     sessionId: string | null;
@@ -378,6 +379,11 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
     }, []);
 
     // Derived state
+    // Disable reconnect (e.g. after a successful swap to prevent auth loops)
+    const disableReconnect = useCallback(() => {
+        clientRef.current?.disableReconnect();
+    }, []);
+
     const isConnected = session.state !== 'disconnected' && session.state !== 'error';
     const isReady = session.state === 'session_ready' || session.state === 'authenticated';
     const hasPendingChannel = clientRef.current?.hasPendingChannel() || false;
@@ -404,6 +410,7 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
         depositToChannel,
         requestChannelCreation,
         createChannelOnChain,
+        disableReconnect,
 
         // Info
         sessionId: session.sessionId || null,

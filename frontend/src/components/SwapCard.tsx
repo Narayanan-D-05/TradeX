@@ -569,6 +569,9 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                     const epochRef = fixing ? fixing.epoch : 0;
                     swapHash = `prism-epoch${epochRef}-${Date.now()}` as `0x${string}`;
 
+                    // Disable auto-reconnect after successful swap — prevents MetaMask auth loops
+                    yellow.disableReconnect();
+
                     setStep('success');
 
                 } catch (yellowError: any) {
