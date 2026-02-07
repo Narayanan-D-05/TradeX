@@ -55,7 +55,11 @@ export function useYellowNetwork(): UseYellowNetworkReturn {
     const { writeContractAsync } = useWriteContract();
 
     const clientRef = useRef<YellowNetworkClient | null>(null);
-    const [session, setSession] = useState<YellowSession>({ state: 'disconnected' });
+    const [session, setSession] = useState<YellowSession>({ 
+        state: 'disconnected',
+        environment: 'sandbox',
+        channelsEnabled: false,
+    });
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [depositHash, setDepositHash] = useState<string | null>(null);

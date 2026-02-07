@@ -1,7 +1,7 @@
 'use client';
 
 import { useAccount, useConnect, useDisconnect } from 'wagmi';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCircleWallet } from '@/hooks/useCircleWallet';
 
 export type ActiveWalletType = 'metamask' | 'circle' | null;
@@ -13,6 +13,12 @@ export function WalletButton() {
     const [showDropdown, setShowDropdown] = useState(false);
     const [showWalletPicker, setShowWalletPicker] = useState(false);
     const [activeWallet, setActiveWallet] = useState<ActiveWalletType>(null);
+    const [mounted, setMounted] = useState(false);
+
+    // Fix hydration mismatch - only render after client mount
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     // Circle Wallet integration
     const circle = useCircleWallet();
@@ -22,6 +28,13 @@ export function WalletButton() {
     const displayAddress = activeWallet === 'circle' 
         ? circle.address 
         : address;
+    
+    // Return null on server/initial render to prevent hydration mismatch
+    if (!mounted) {
+        return (
+            <div className="w-[160px] h-[42px]" /> // Placeholder with same dimensions
+        );
+    }
 
     // Handle MetaMask connection
     const connectMetaMask = () => {
@@ -92,30 +105,28 @@ export function WalletButton() {
                                     </span>
                                 )}
                             </div>
-                            {activeWallet === 'circle' && circle.wallet && (
+                            {activeWallet === 'circle' && circle.address && (
                                 <div className="mt-2 text-xs text-gray-500">
-                                    ID: {circle.walletId?.slice(0, 15)}...
+                                    ID: {circle.address.slice(0, 15)}...
                                 </div>
                             )}
                         </div>
 
-                        {/* Circle Wallet Balances */}
-                        {activeWallet === 'circle' && circle.balances.length > 0 && (
+                        {/* Circle Wallet Balance */}
+                        {activeWallet === 'circle' && circle.balance && (
                             <div className="px-4 py-2 border-b border-gray-800">
-                                <div className="text-xs text-gray-500 mb-1">Balances</div>
-                                {circle.balances.map((b, i) => (
-                                    <div key={i} className="flex justify-between text-xs py-0.5">
-                                        <span className="text-gray-400">{b.symbol}</span>
-                                        <span className="text-gray-200 font-mono">
-                                            {parseFloat(b.amount).toLocaleString()}
-                                        </span>
-                                    </div>
-                                ))}
+                                <div className="text-xs text-gray-500 mb-1">Balance</div>
+                                <div className="flex justify-between text-xs py-0.5">
+                                    <span className="text-gray-400">{circle.chainName || 'ETH'}</span>
+                                    <span className="text-gray-200 font-mono">
+                                        {parseFloat(circle.balance).toFixed(4)} ETH
+                                    </span>
+                                </div>
                             </div>
                         )}
 
                         {/* Switch Wallet */}
-                        {activeWallet === 'metamask' && !circle.isReady && (
+                        {activeWallet === 'metamask' && !circle.isConnected && (
                             <button
                                 onClick={async () => {
                                     setShowDropdown(false);

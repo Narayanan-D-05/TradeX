@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient } from 'wagmi';
-import { parseEther, parseUnits, formatEther, formatUnits, encodeFunctionData } from 'viem';
+import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient, useEnsName, useEnsAddress } from 'wagmi';
+import { parseEther, parseUnits, formatEther, formatUnits, encodeFunctionData, isAddress } from 'viem';
 import { useYellowNetwork } from '@/hooks/useYellowNetwork';
+import { ENSProfile } from '@/components/ENSProfile';
 import { useCircleWallet } from '@/hooks/useCircleWallet';
-import { useLiFi } from '@/hooks/useLiFi';
-import { SUPPORTED_CHAINS, TEST_TOKENS } from '@/lib/lifiService';
+import { getSwapQuote, checkPoolExists, TOKENS, getINRAEDPool, UNISWAP_V4_CONTRACTS } from '@/lib/uniswapV4Service';
 
 // Contract ABIs
 const TRADEX_ABI = [
@@ -185,7 +185,7 @@ const CONTRACTS = {
     INR_STABLE: (process.env.NEXT_PUBLIC_INR_STABLE || '0xC6DADFdf4c046D0A91946351A0aceee261DcA517') as `0x${string}`,
     AED_STABLE: (process.env.NEXT_PUBLIC_AED_STABLE || '0x05016024652D0c947E5B49532e4287374720d3b2') as `0x${string}`,
     YELLOW_ADAPTER: (process.env.NEXT_PUBLIC_YELLOW_ADAPTER || '0x2Bc0b16e923Da8D3fc557fF6cF13be061Af3744D') as `0x${string}`,
-    LIFI_ROUTER: (process.env.NEXT_PUBLIC_LIFI_ROUTER || '0x518042288Ab2633AE7EA3d4F272cEFd21D33126d') as `0x${string}`,
+    UNISWAP_ROUTER: UNISWAP_V4_CONTRACTS.UniversalRouter,
 };
 
 interface SwapCardProps {
@@ -200,8 +200,9 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const [txHash, setTxHash] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [useGasless, setUseGasless] = useState(true);
-    const [swapMode, setSwapMode] = useState<'gasless' | 'standard' | 'circle'>('gasless');
-    const [destChainId, setDestChainId] = useState<number>(84532); // Default: Base Sepolia
+    const [swapMode, setSwapMode] = useState<'gasless' | 'circle'>('gasless');
+    const [uniswapQuote, setUniswapQuote] = useState<{ amountOut: string; amountOutRaw: bigint; exchangeRate: string; gasEstimate: bigint; error?: string; } | null>(null);
+    const [loadingQuote, setLoadingQuote] = useState(false);
 
     const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
@@ -215,8 +216,19 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     // Circle Wallet Integration
     const circleWallet = useCircleWallet();
 
-    // LI.FI SDK Integration
-    const lifi = useLiFi();
+    // ENS Resolution
+    const isEnsName = recipient.includes('.eth');
+    const { data: resolvedAddress } = useEnsAddress({
+        name: isEnsName ? recipient : undefined,
+        chainId: 1, // ENS is on mainnet, but also works on Sepolia
+    });
+    const { data: ensName } = useEnsName({
+        address: (!isEnsName && isAddress(recipient)) ? (recipient as `0x${string}`) : undefined,
+        chainId: 1,
+    });
+
+    // Final recipient address (resolved from ENS or direct address)
+    const finalRecipient = isEnsName ? (resolvedAddress || recipient) : recipient;
 
     // Check for "Zombie" sessions (Expired but still marked Active in storage)
     const { data: sessionData, refetch: refetchSession } = useReadContract({
@@ -259,6 +271,33 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const destNetwork = isFundBroker ? 'Arc Testnet' : 'Ethereum Sepolia';
 
     const sourceTokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
+
+    // Fetch Uniswap quote when amount changes
+    useEffect(() => {
+        async function fetchUniswapQuote() {
+            if (!amount || parseFloat(amount) <= 0) {
+                setUniswapQuote(null);
+                return;
+            }
+
+            try {
+                setLoadingQuote(true);
+                const poolKey = getINRAEDPool();
+                const tokenIn = isFundBroker ? TOKENS.INR_STABLE : TOKENS.AED_STABLE;
+                const tokenOut = isFundBroker ? TOKENS.AED_STABLE : TOKENS.INR_STABLE;
+
+                const quote = await getSwapQuote(poolKey, tokenIn, tokenOut, amount, 18);
+                setUniswapQuote(quote);
+            } catch (error) {
+                console.error('Failed to fetch Uniswap quote:', error);
+                setUniswapQuote(null);
+            } finally {
+                setLoadingQuote(false);
+            }
+        }
+
+        fetchUniswapQuote();
+    }, [amount, isFundBroker]);
 
     // Fetch Token Balance
     const { data: tokenBalance, refetch: refetchBalance } = useReadContract({
@@ -354,74 +393,16 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const handleSwap = async () => {
         if (!amount || !recipient || !isConnected || !address || !publicClient) return;
 
+        // Validate ENS resolution if using ENS name
+        if (isEnsName && !resolvedAddress) {
+            setErrorMsg('ENS name could not be resolved. Please check the name or use a direct address.');
+            setStep('error');
+            return;
+        }
+
         setStep('approving');
         setErrorMsg(null);
         setTxHash(null);
-
-        // ================== LI.FI SDK CROSS-CHAIN MODE ==================
-        if (swapMode === 'standard') {
-            console.log('🌉 Using LI.FI SDK for cross-chain swap');
-            
-            try {
-                setStep('approving');  // Getting quote
-                
-                // Determine source token based on current chain
-                const sourceChain = chainId || 11155111; // Default to Sepolia
-                const sourceTokenAddress = sourceChain === 11155111 
-                    ? TEST_TOKENS.SEPOLIA.USDC 
-                    : '0x0000000000000000000000000000000000000000'; // Native token as fallback
-                
-                // Destination token on target chain
-                const destTokenAddress = destChainId === 84532
-                    ? TEST_TOKENS.BASE_SEPOLIA.USDC
-                    : '0x0000000000000000000000000000000000000000'; // Native token as fallback
-                
-                const amountInWei = parseUnits(amount, 6); // USDC has 6 decimals
-                
-                // Get LI.FI quote
-                console.log('📊 Getting LI.FI quote...', {
-                    fromChain: sourceChain,
-                    toChain: destChainId,
-                    fromToken: sourceTokenAddress,
-                    toToken: destTokenAddress,
-                    amount: amountInWei.toString(),
-                });
-                
-                await lifi.getQuote({
-                    fromChain: sourceChain,
-                    toChain: destChainId,
-                    fromToken: sourceTokenAddress,
-                    toToken: destTokenAddress,
-                    fromAmount: amountInWei.toString(),
-                    fromAddress: address,
-                    toAddress: recipient as `0x${string}`,
-                });
-                
-                if (!lifi.quote) {
-                    setErrorMsg('Failed to get quote from LI.FI. Try different chains or amounts.');
-                    setStep('error');
-                    return;
-                }
-                
-                console.log('✅ Quote received, executing swap...');
-                setStep('swapping');
-                
-                // Execute the swap using LI.FI SDK
-                const txHash = await lifi.executeSwap();
-                
-                console.log('✅ LI.FI swap completed:', txHash);
-                setTxHash(txHash as `0x${string}`);
-                setStep('success');
-                return; // Exit early, LI.FI handled everything
-                
-            } catch (error: any) {
-                console.error('❌ LI.FI swap error:', error);
-                setErrorMsg(`LI.FI swap failed: ${error.message || 'Unknown error'}`);
-                setStep('error');
-                return;
-            }
-        }
-        // ===============================================================
 
         // Determine chain based on mode (for Yellow/Circle modes)
         const targetChainId = isFundBroker ? 11155111 : 5042002; // Sepolia or Arc
@@ -448,9 +429,9 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             }
 
             // Step 1: Token Approval (ONLY for standard LI.FI flow, NOT for Yellow Network)
-            // Yellow Network uses off-chain state channels and doesn't need LI.FI contract approval
+            // Yellow Network uses off-chain state channels and doesn't need Uniswap contract approval
             if (!useGasless || !yellow.isReady) {
-                // Standard LI.FI flow requires approval
+                // Standard Uniswap V4 flow requires approval
                 setStep('approving');
 
                 // Check existing allowance - skip approval if already sufficient
@@ -458,19 +439,19 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                     address: tokenAddress,
                     abi: ERC20_ABI,
                     functionName: 'allowance',
-                    args: [address, CONTRACTS.LIFI_ROUTER],
+                    args: [address, CONTRACTS.UNISWAP_ROUTER],
                 }) as bigint;
 
                 console.log('Current allowance:', currentAllowance.toString());
 
                 if (currentAllowance < amountInWei) {
                     // Need to approve - use exact amount
-                    console.log('Approving tokens for LI.FI...');
+                    console.log('Approving tokens for Uniswap V4...');
                     const approveHash = await writeContractAsync({
                         address: tokenAddress,
                         abi: ERC20_ABI,
                         functionName: 'approve',
-                        args: [CONTRACTS.LIFI_ROUTER, amountInWei],
+                        args: [CONTRACTS.UNISWAP_ROUTER, amountInWei],
                     });
                     console.log('Approval tx:', approveHash);
 
@@ -531,17 +512,17 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                     // Execute standard swap as fallback
                     if (isFundBroker) {
                         swapHash = await writeContractAsync({
-                            address: CONTRACTS.LIFI_ROUTER,
-                            abi: LIFI_ABI,
-                            functionName: 'zapToArc',
-                            args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                            address: CONTRACTS.TRADEX,
+                            abi: TRADEX_ABI,
+                            functionName: 'fundBroker',
+                            args: [amountInWei, finalRecipient as `0x${string}`],
                         });
                     } else {
                         swapHash = await writeContractAsync({
-                            address: CONTRACTS.LIFI_ROUTER,
-                            abi: LIFI_ABI,
-                            functionName: 'zapToSepolia',
-                            args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                            address: CONTRACTS.TRADEX,
+                            abi: TRADEX_ABI,
+                            functionName: 'sendHome',
+                            args: [amountInWei, finalRecipient as `0x${string}`],
                         });
                     }
                 }
@@ -565,22 +546,22 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
                 if (isFundBroker) {
                     swapHash = await writeContractAsync({
-                        address: CONTRACTS.LIFI_ROUTER,
-                        abi: LIFI_ABI,
-                        functionName: 'zapToArc',
-                        args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                        address: CONTRACTS.TRADEX,
+                        abi: TRADEX_ABI,
+                        functionName: 'fundBroker',
+                        args: [amountInWei, finalRecipient as `0x${string}`],
                     });
                 } else {
                     swapHash = await writeContractAsync({
-                        address: CONTRACTS.LIFI_ROUTER,
-                        abi: LIFI_ABI,
-                        functionName: 'zapToSepolia',
-                        args: [tokenAddress, tokenOut, amountInWei, recipient as `0x${string}`],
+                        address: CONTRACTS.TRADEX,
+                        abi: TRADEX_ABI,
+                        functionName: 'sendHome',
+                        args: [amountInWei, finalRecipient as `0x${string}`],
                     });
                 }
             }
 
-            console.log('LI.FI Zap tx:', swapHash);
+            console.log('TradeX tx:', swapHash);
             setTxHash(swapHash);
             setStep('success');
             onSwap?.(amount, recipient);
@@ -665,18 +646,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         <div className="flex items-center justify-center gap-2">
                             <span>⚡</span>
                             <span>Yellow Network</span>
-                        </div>
-                    </button>
-                    <button
-                        onClick={() => { setSwapMode('standard'); setUseGasless(false); }}
-                        className={`flex-1 px-3 py-2.5 rounded-md text-sm font-medium transition-all ${swapMode === 'standard'
-                            ? 'bg-indigo-500/30 text-indigo-300 border border-indigo-500/50 shadow-lg shadow-indigo-500/20'
-                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/30'
-                            }`}
-                    >
-                        <div className="flex items-center justify-center gap-2">
-                            <span>⛽</span>
-                            <span>LI.FI</span>
                         </div>
                     </button>
                     <button
@@ -783,6 +752,13 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                             : '0.00 TEST'}
                                     </span>
                                 </div>
+                            </div>
+
+                            {/* Settlement Token Info */}
+                            <div className="p-2 bg-blue-500/10 border border-blue-500/30 rounded">
+                                <p className="text-xs text-blue-300">
+                                    ℹ️ <strong>Settlement Token:</strong> Yellow Network uses <code className="text-blue-200 bg-blue-900/30 px-1 rounded">ytest.usd</code> as the cross-chain settlement token. Swaps are executed gaslessly via state channels.
+                                </p>
                             </div>
 
                             {/* Action Buttons */}
@@ -1129,112 +1105,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </div>
             )}
 
-            {/* LI.FI Cross-Chain SDK Interface */}
-            {swapMode === 'standard' && isConnected && (
-                <div className="mb-4 p-4 bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-pink-500/10 border border-indigo-500/30 rounded-lg">
-                    {/* Header */}
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-full flex items-center justify-center">
-                                <span className="text-white text-xs font-bold">⛓️</span>
-                            </div>
-                            <span className="text-sm font-medium text-indigo-200">LI.FI Cross-Chain Bridge</span>
-                        </div>
-                        {lifi.quote && (
-                            <span className="text-xs px-2 py-0.5 bg-emerald-500/20 rounded text-emerald-300 border border-emerald-500/30">
-                                Quote Ready
-                            </span>
-                        )}
-                    </div>
-
-                    {/* Destination Chain Selector */}
-                    <div className="mb-3">
-                        <label className="text-xs text-gray-400 mb-1.5 block">Destination Chain</label>
-                        <select
-                            value={destChainId}
-                            onChange={(e) => setDestChainId(Number(e.target.value))}
-                            className="w-full px-3 py-2 bg-gray-800/50 border border-indigo-500/30 rounded text-sm text-white focus:outline-none focus:border-indigo-400"
-                        >
-                            {Object.values(SUPPORTED_CHAINS).map((chain) => (
-                                <option key={chain.id} value={chain.id}>
-                                    {chain.name} (Chain ID: {chain.id})
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    {/* Quote Display */}
-                    {lifi.quote && (
-                        <div className="mb-3 p-3 bg-indigo-500/10 border border-indigo-500/30 rounded">
-                            <div className="grid grid-cols-2 gap-2 text-xs">
-                                <div>
-                                    <span className="text-gray-400 block mb-1">You'll Receive</span>
-                                    <span className="text-indigo-300 font-mono">
-                                        {(Number(lifi.quote.toAmount) / 1e6).toFixed(2)} Tokens
-                                    </span>
-                                </div>
-                                <div>
-                                    <span className="text-gray-400 block mb-1">Est. Time</span>
-                                    <span className="text-indigo-300">
-                                        ~{Math.ceil(lifi.quote.estimatedTime / 60)}m
-                                    </span>
-                                </div>
-                                <div>
-                                    <span className="text-gray-400 block mb-1">Routes Found</span>
-                                    <span className="text-indigo-300">{lifi.quote.routes.length} available</span>
-                                </div>
-                                <div>
-                                    <span className="text-gray-400 block mb-1">Est. Gas</span>
-                                    <span className="text-indigo-300">${lifi.quote.estimatedGas}</span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Status Messages */}
-                    {lifi.isLoadingQuote && (
-                        <div className="mb-3 p-2 bg-blue-500/10 rounded text-xs text-blue-300 flex items-center gap-2">
-                            <span className="animate-spin">⏳</span>
-                            <span>Fetching best cross-chain routes...</span>
-                        </div>
-                    )}
-
-                    {lifi.isExecuting && (
-                        <div className="mb-3 p-2 bg-yellow-500/10 rounded text-xs text-yellow-300 flex items-center gap-2">
-                            <span className="animate-pulse">⚡</span>
-                            <span>{lifi.executionStatus || 'Executing swap...'}</span>
-                        </div>
-                    )}
-
-                    {lifi.error && (
-                        <div className="mb-3 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300">
-                            ⚠️ {lifi.error}
-                        </div>
-                    )}
-
-                    {lifi.txHash && (
-                        <div className="mb-3 p-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
-                            <span className="text-xs text-emerald-300 block mb-1">✅ Transaction Hash</span>
-                            <a
-                                href={`https://scan.li.fi/tx/${lifi.txHash}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs text-emerald-400 hover:underline break-all font-mono"
-                            >
-                                {lifi.txHash.slice(0, 20)}...{lifi.txHash.slice(-20)}
-                            </a>
-                        </div>
-                    )}
-
-                    {/* Info */}
-                    <div className="text-xs text-indigo-400/70 space-y-1">
-                        <p>• Swap tokens across multiple EVM chains</p>
-                        <p>• Powered by LI.FI SDK with best route optimization</p>
-                        <p>• Source Chain: {chainId === 11155111 ? 'Sepolia' : 'Current Network'}</p>
-                    </div>
-                </div>
-            )}
-
             {/* Testnet Info Banner */}
             {isConnected && (
                 <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
@@ -1411,21 +1281,84 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         <div className="mb-6">
                             <label className="block text-sm text-gray-400 mb-2">
                                 {isFundBroker ? 'Broker Wallet Address' : 'Recipient Wallet Address'}
+                                <span className="ml-2 text-xs text-blue-400">(Supports ENS names)</span>
                             </label>
                             <input
                                 type="text"
                                 value={recipient}
                                 onChange={(e) => setRecipient(e.target.value)}
-                                placeholder="0x..."
+                                placeholder="0x... or name.eth"
                                 className="input-field font-mono text-sm"
                                 disabled={step !== 'idle'}
                             />
+                            
+                            {/* ENS Resolution Display with Rich Profile */}
+                            {(isEnsName || ensName) && recipient && (
+                                <div className="mt-3">
+                                    <ENSProfile 
+                                        nameOrAddress={recipient} 
+                                        compact={false}
+                                    />
+                                </div>
+                            )}
+                            {isEnsName && !resolvedAddress && (
+                                <div className="mt-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded text-xs text-yellow-300 flex items-center gap-2">
+                                    <span>⚠️</span>
+                                    <span>ENS name not found or not yet resolved. Check spelling or try again.</span>
+                                </div>
+                            )}
                         </div>
 
                         {/* Fee Breakdown */}
                         <div className="bg-gray-900/50 rounded-lg p-4 mb-6 space-y-2">
+                            {/* Uniswap Live Price (if available) */}
+                            {uniswapQuote && (
+                                <div className="mb-3 p-2 bg-purple-500/10 border border-purple-500/30 rounded">
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="text-xs text-purple-300 flex items-center gap-1">
+                                            <span>🦄</span>
+                                            <span>Uniswap V4 Live Price</span>
+                                        </span>
+                                        <span className="text-xs text-emerald-400">Real-time</span>
+                                    </div>
+                                    <div className="flex justify-between text-sm">
+                                        <span className="text-purple-200">1 {sourceToken} =</span>
+                                        <span className="text-white font-semibold">
+                                            {parseFloat(uniswapQuote.exchangeRate).toFixed(6)} {destToken}
+                                        </span>
+                                    </div>
+                                    <div className="text-xs text-purple-400/70 mt-1">
+                                        You'll receive: {uniswapQuote.amountOut} {destToken}
+                                    </div>
+                                </div>
+                            )}
+                            {loadingQuote && (
+                                <div className="mb-3 p-2 bg-purple-500/10 border border-purple-500/30 rounded">
+                                    <span className="text-xs text-purple-300 flex items-center gap-2">
+                                        <span className="animate-spin">⏳</span>
+                                        <span>Fetching Uniswap V4 quote...</span>
+                                    </span>
+                                </div>
+                            )}
+                            {uniswapQuote?.error && (
+                                <div className="mb-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                                    <div className="flex items-start gap-2">
+                                        <span className="text-yellow-400 text-lg">🟡</span>
+                                        <div>
+                                            <div className="text-xs font-medium text-yellow-300 mb-1">Yellow Network Recommended</div>
+                                            <div className="text-xs text-gray-300 mb-2">
+                                                ⚡ <strong>Gasless swaps</strong> powered by Yellow Network state channels
+                                            </div>
+                                            <div className="text-xs text-gray-400">
+                                                V4 pool needs liquidity • Yellow Network is production-ready
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            
                             <div className="flex justify-between text-sm">
-                                <span className="text-gray-400">Exchange Rate</span>
+                                <span className="text-gray-400">Exchange Rate (Oracle)</span>
                                 <span className="text-white">
                                     1 {sourceToken} = {isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE} {destToken}
                                 </span>
@@ -1442,7 +1375,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                             </div>
                             <div className="flex justify-between text-sm">
                                 <span className="text-gray-400">Estimated Time</span>
-                                <span className="text-emerald-400">~45 seconds</span>
+                                <span className="text-emerald-400">~2 seconds</span>
                             </div>
                             <div className="border-t border-gray-700 pt-2 mt-2">
                                 <div className="flex justify-between font-semibold">

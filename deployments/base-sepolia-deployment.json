@@ -1,0 +1,52 @@
+{
+  "network": "baseSepolia",
+  "chainId": 84532,
+  "timestamp": "2026-02-07",
+  "deployer": "0x1cC4bf265cA5497C97741abc1a263dc48f96E754",
+  "uniswapV4": {
+    "poolManager": "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408",
+    "positionManager": "0x4b2c77d209d3405f41a037ec6c77f7f5b8e2ca80",
+    "universalRouter": "0x492e6456d9528771018deb9e87ef7750ef184104",
+    "quoter": "0x4a6513c898fe1b2d0e78d3b0e0a4a151589b1cba",
+    "stateView": "0x571291b572ed32ce6751a2cb2486ebee8defb9b4",
+    "poolSwapTest": "0x8b5bcc363dde2614281ad875bad385e0a785d3b9",
+    "poolModifyLiquidityTest": "0x37429cd17cb1454c34e7f50b09725202fd533039",
+    "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "source": "official",
+    "documentation": "https://docs.uniswap.org/contracts/v4/deployments"
+  },
+  "tokens": {
+    "AED_STABLE": {
+      "address": "0xd16B4e66c77048D68e6438068AfBBf4c96506d7F",
+      "name": "AED Stable",
+      "symbol": "AED",
+      "decimals": 6,
+      "initialSupply": "100100000000"
+    },
+    "INR_STABLE": {
+      "address": "0xed7D8f68d65F07275E162b1B7d8D9c95dF4af48a",
+      "name": "INR Stable",
+      "symbol": "INR",
+      "decimals": 6,
+      "initialSupply": "2270000000000"
+    }
+  },
+  "pool": {
+    "id": "0x33ee81b5aedba6f3a2aa1f426c5ee98f8cf9c821524f381d1c1d61d8912af281",
+    "currency0": "0xd16B4e66c77048D68e6438068AfBBf4c96506d7F",
+    "currency1": "0xed7D8f68d65F07275E162b1B7d8D9c95dF4af48a",
+    "fee": 3000,
+    "tickSpacing": 60,
+    "hooks": "0x0000000000000000000000000000000000000000",
+    "sqrtPriceX96": "377680650705498097308424011251",
+    "initialPrice": "1 AED = 22.727 INR",
+    "status": "initialized",
+    "initTx": "0xee31eaea3bce74e592264e2aa355b9aed490752a4ca77725e8d202541a018465"
+  },
+  "helpers": {
+    "unlockHelper": "0xE39C2bd670b3d705b81E8cd74CD1D659914947FE",
+    "v4LiquidityManager": "0xD44D04eCec4F4f46fab3a492a0E2933bdA3C5Cbd",
+    "simpleV4Router": "0xCC6e02edEE1f8033CfB23982d70AB343d755E5f1"
+  },
+  "explorer": "https://sepolia.basescan.org"
+}

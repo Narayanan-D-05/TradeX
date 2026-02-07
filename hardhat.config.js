@@ -4,13 +4,36 @@ require("dotenv").config();
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
     solidity: {
-        version: "0.8.20",
-        settings: {
-            optimizer: {
-                enabled: true,
-                runs: 200,
+        compilers: [
+            {
+                version: "0.8.20",
+                settings: {
+                    optimizer: {
+                        enabled: true,
+                        runs: 200,
+                    },
+                },
             },
-        },
+            {
+                version: "0.8.24",
+                settings: {
+                    optimizer: {
+                        enabled: true,
+                        runs: 200,
+                    },
+                },
+            },
+            {
+                version: "0.8.26",
+                settings: {
+                    optimizer: {
+                        enabled: true,
+                        runs: 200,
+                    },
+                    viaIR: true,
+                },
+            },
+        ],
     },
     networks: {
         hardhat: {
@@ -31,11 +54,30 @@ module.exports = {
                 : [],
             chainId: 5042002,
         },
+        baseSepolia: {
+            url: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
+            accounts: process.env.DEPLOYER_PRIVATE_KEY
+                ? [process.env.DEPLOYER_PRIVATE_KEY]
+                : [],
+            chainId: 84532,
+            timeout: 120000,
+        },
     },
     etherscan: {
         apiKey: {
             sepolia: process.env.ETHERSCAN_API_KEY || "",
+            baseSepolia: process.env.BASESCAN_API_KEY || "",
         },
+        customChains: [
+            {
+                network: "baseSepolia",
+                chainId: 84532,
+                urls: {
+                    apiURL: "https://api-sepolia.basescan.org/api",
+                    browserURL: "https://sepolia.basescan.org"
+                }
+            }
+        ]
     },
     paths: {
         sources: "./contracts",

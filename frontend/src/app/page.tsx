@@ -26,14 +26,19 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-white">TradeX</h1>
-              <p className="text-xs text-gray-500">INR-AED Atomic Bridge</p>
+              <p className="text-xs text-gray-500">Gasless Remittance Protocol</p>
             </div>
           </div>
 
           {/* Navigation */}
           <nav className="hidden md:flex items-center gap-6">
-            <a href="/" className="text-sm text-white font-medium hover:text-blue-400 transition">Swap</a>
-            <a href="/circle" className="text-sm text-blue-400 font-medium hover:text-blue-300 transition">
+            <a href="/" className="text-sm text-yellow-400 font-medium hover:text-yellow-300 transition flex items-center gap-1.5">
+              ⚡ Yellow Swaps
+            </a>
+            <a href="/ens" className="text-sm text-blue-400 font-medium hover:text-blue-300 transition flex items-center gap-1.5">
+              🏷️ ENS Demo
+            </a>
+            <a href="/circle" className="text-sm text-gray-400 hover:text-white transition">
               🔵 Circle Gateway
             </a>
             <a href="#" className="text-sm text-gray-400 hover:text-white transition">Stats</a>
@@ -69,6 +74,20 @@ export default function Home() {
           <WalletButton />
         </div>
       </header>
+
+      {/* Yellow Network Hero Banner */}
+      <div className="bg-gradient-to-r from-yellow-500/10 via-amber-500/10 to-yellow-500/10 border-y border-yellow-500/20">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <div className="flex items-center justify-center gap-3 text-center">
+            <span className="text-2xl">⚡</span>
+            <div>
+              <span className="text-yellow-400 font-bold">Powered by Yellow Network</span>
+              <span className="text-gray-400 mx-2">•</span>
+              <span className="text-gray-300 text-sm">Zero Gas Fees • Instant Settlement • ERC-7824 Nitrolite</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-6 py-8">
@@ -129,9 +148,9 @@ export default function Home() {
                     <span className="text-lg">⚡</span>
                   </div>
                   <p className="text-sm font-medium text-green-400">TradeX</p>
-                  <p className="text-xs text-gray-500">LI.FI + Yellow + Circle</p>
+                  <p className="text-xs text-gray-500">🦄 Uniswap + 🌟 Yellow + 🔵 Circle + 🏷️ ENS</p>
                   <span className="inline-block mt-2 px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-xs border border-green-500/30">
-                    45s • 0.3% fee
+                    2s • $0 gas • Human-readable
                   </span>
                 </div>
 
@@ -160,7 +179,7 @@ export default function Home() {
                 </div>
                 <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-xl">
                   <p className="text-sm text-gray-400 mb-1">TradeX</p>
-                  <p className="text-green-400 font-semibold">45s • 0.3%</p>
+                  <p className="text-green-400 font-semibold">2s • $0 gas</p>
                 </div>
               </div>
             </div>
@@ -177,7 +196,7 @@ export default function Home() {
                   </div>
                   <div>
                     <h4 className="font-semibold text-white">Raj - Stock Investor</h4>
-                    <p className="text-sm text-gray-400">Fund DFM/ADX broker with ₹10L → 446K AED in 45s</p>
+                    <p className="text-sm text-gray-400">Fund DFM/ADX broker with ₹10L → 446K AED in 2s, $0 gas ⚡</p>
                   </div>
                 </div>
 
@@ -188,7 +207,7 @@ export default function Home() {
                   </div>
                   <div>
                     <h4 className="font-semibold text-white">Priya - UAE Expat</h4>
-                    <p className="text-sm text-gray-400">Send AED 5K home → ₹1.1L to family in 20s</p>
+                    <p className="text-sm text-gray-400">Send AED 5K home → ₹1.1L to family in 2s, gasless 💚</p>
                   </div>
                 </div>
               </div>
@@ -198,21 +217,149 @@ export default function Home() {
             <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6">
               <h3 className="text-lg font-semibold text-white mb-4">Powered By</h3>
               <div className="flex flex-wrap gap-3">
-                <span className="px-4 py-2 bg-blue-500/10 text-blue-400 rounded-lg text-sm border border-blue-500/20">
-                  Arc Network
+                <span className="px-4 py-2 bg-yellow-500/10 text-yellow-400 rounded-lg text-sm border border-yellow-500/20 font-medium">
+                  🟡 Yellow Network
                 </span>
-                <span className="px-4 py-2 bg-purple-500/10 text-purple-400 rounded-lg text-sm border border-purple-500/20">
-                  LI.FI Protocol
+                <span className="px-4 py-2 bg-blue-500/10 text-blue-400 rounded-lg text-sm border border-blue-500/20 font-medium">
+                  🔵 Circle/Arc
                 </span>
-                <span className="px-4 py-2 bg-yellow-500/10 text-yellow-400 rounded-lg text-sm border border-yellow-500/20">
-                  Yellow Network
+                <span className="px-4 py-2 bg-purple-500/10 text-purple-400 rounded-lg text-sm border border-purple-500/20 font-medium">
+                  🦄 Uniswap V4
                 </span>
-                <span className="px-4 py-2 bg-sky-500/10 text-sky-400 rounded-lg text-sm border border-sky-500/20">
-                  Circle Wallets
+                <span className="px-4 py-2 bg-sky-500/10 text-sky-400 rounded-lg text-sm border border-sky-500/20 font-medium">
+                  🏷️ ENS
                 </span>
                 <span className="px-4 py-2 bg-gray-500/10 text-gray-400 rounded-lg text-sm border border-gray-500/20">
                   Ethereum
                 </span>
+              </div>
+            </div>
+
+            {/* Yellow Network Integration Showcase */}
+            <div className="bg-gradient-to-br from-yellow-500/10 to-amber-500/10 border border-yellow-500/30 rounded-2xl p-6 mt-6">
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-2xl">⚡</span>
+                <h3 className="text-lg font-semibold text-white">Yellow Network: Gasless & Instant</h3>
+              </div>
+              <p className="text-gray-300 text-sm mb-4">
+                Trade and transfer with <span className="text-yellow-400 font-bold">zero gas fees</span> using state channel technology. Instant settlements powered by the Nitrolite protocol.
+              </p>
+              
+              <div className="grid md:grid-cols-2 gap-4 mb-4">
+                {/* Feature 1: Zero Gas */}
+                <div className="bg-black/30 rounded-lg p-4 border border-yellow-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">💰</span>
+                    <div className="text-yellow-400 font-semibold">Zero Gas Fees</div>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    All transactions happen off-chain in state channels. No gas fees, no waiting for confirmations.
+                  </p>
+                </div>
+
+                {/* Feature 2: Instant Settlement */}
+                <div className="bg-black/30 rounded-lg p-4 border border-amber-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">⚡</span>
+                    <div className="text-amber-400 font-semibold">Instant Settlement</div>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    Payments settle in milliseconds using Layer 2 clearing. Perfect for remittances and cross-border transfers.
+                  </p>
+                </div>
+
+                {/* Feature 3: Secure */}
+                <div className="bg-black/30 rounded-lg p-4 border border-yellow-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">🔐</span>
+                    <div className="text-yellow-400 font-semibold">Nitrolite Security</div>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    Funds secured by ERC-7824 Nitrolite protocol. Withdraw to L1 anytime with cryptographic guarantees.
+                  </p>
+                </div>
+
+                {/* Feature 4: Multi-Asset */}
+                <div className="bg-black/30 rounded-lg p-4 border border-amber-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">🌐</span>
+                    <div className="text-amber-400 font-semibold">Multi-Asset Support</div>
+                  </div>
+                  <p className="text-xs text-gray-400">
+                    Support for any ERC-20 token. Open state channels, trade, and close anytime with on-chain settlement.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 text-gray-400">
+                  <span className="text-emerald-400">✓</span>
+                  <span>Integrated with Nitrolite SDK v0.5.3</span>
+                </div>
+                <a 
+                  href="/" 
+                  className="text-yellow-400 hover:text-yellow-300 font-medium"
+                >
+                  Try Gasless Swaps →
+                </a>
+              </div>
+            </div>
+
+            {/* ENS Integration Showcase */}
+            <div className="bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/30 rounded-2xl p-6 mt-6">
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-2xl">🏷️</span>
+                <h3 className="text-lg font-semibold text-white">ENS: Human-Readable Addresses</h3>
+              </div>
+              <p className="text-gray-300 text-sm mb-4">
+                Send payments to <span className="text-blue-400 font-medium">vitalik.eth</span> instead of <span className="text-gray-500 font-mono text-xs">0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045</span>
+              </p>
+              
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="bg-black/30 rounded-lg p-4 border border-blue-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-400 flex items-center justify-center text-white font-bold">
+                      V
+                    </div>
+                    <div>
+                      <div className="text-white font-medium">vitalik.eth</div>
+                      <div className="text-xs text-gray-400">Ethereum Foundation</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 font-mono break-all">
+                    0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+                  </div>
+                </div>
+
+                <div className="bg-black/30 rounded-lg p-4 border border-purple-500/20">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center text-white font-bold">
+                      N
+                    </div>
+                    <div>
+                      <div className="text-white font-medium">nick.eth</div>
+                      <div className="text-xs text-gray-400">ENS Lead Developer</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 font-mono break-all">
+                    0xb8c2C29ee19D8307cb7255e1Cd9CbDE883A267d5
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 text-gray-400">
+                  <span className="text-emerald-400">✓</span>
+                  <span>Automatically resolves ENS names</span>
+                </div>
+                <a 
+                  href="https://ens.domains" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  Learn more →
+                </a>
               </div>
             </div>
           </div>

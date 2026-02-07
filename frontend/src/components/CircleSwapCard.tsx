@@ -65,10 +65,10 @@ const ERC20_ABI = [
 
 // Circle-enhanced contract addresses
 const CIRCLE_CONTRACTS = {
-  CIRCLE_ARC_GATEWAY: process.env.NEXT_PUBLIC_CIRCLE_ARC_GATEWAY || '0xFc79e0140D37fB855e93B5485A1288E08c0689ce' as `0x${string}`,
-  INR_STABLE: process.env.NEXT_PUBLIC_INR_STABLE || '0x836879FAFF6d2ce51412A0ebf7E428e9cb87cD41' as `0x${string}`,
-  AED_STABLE: process.env.NEXT_PUBLIC_AED_STABLE || '0x56abb7f9Fcf60892b044a2b590cD46B8B87C2E3c' as `0x${string}`,
-  USDC: process.env.NEXT_PUBLIC_USDC || '0xF8C377FA64E5d3De1BDf4e3030fF0D2766f2f85b' as `0x${string}`,
+  CIRCLE_ARC_GATEWAY: (process.env.NEXT_PUBLIC_CIRCLE_ARC_GATEWAY || '0xFc79e0140D37fB855e93B5485A1288E08c0689ce') as `0x${string}`,
+  INR_STABLE: (process.env.NEXT_PUBLIC_INR_STABLE || '0x836879FAFF6d2ce51412A0ebf7E428e9cb87cD41') as `0x${string}`,
+  AED_STABLE: (process.env.NEXT_PUBLIC_AED_STABLE || '0x56abb7f9Fcf60892b044a2b590cD46B8B87C2E3c') as `0x${string}`,
+  USDC: (process.env.NEXT_PUBLIC_USDC || '0xF8C377FA64E5d3De1BDf4e3030fF0D2766f2f85b') as `0x${string}`,
 };
 
 const CHAIN_CONFIGS = {
@@ -108,7 +108,7 @@ export function CircleSwapCard({ mode }: CircleSwapCardProps) {
 
   // Fetch token balance
   const { data: tokenBalance, refetch: refetchBalance } = useReadContract({
-    address: isFundBroker ? CIRCLE_CONTRACTS.INR_STABLE : CIRCLE_CONTRACTS.AED_STABLE,
+    address: (isFundBroker ? CIRCLE_CONTRACTS.INR_STABLE : CIRCLE_CONTRACTS.AED_STABLE) as `0x${string}`,
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
