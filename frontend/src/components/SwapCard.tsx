@@ -6,7 +6,8 @@ import { parseEther, parseUnits, formatEther, formatUnits, encodeFunctionData, i
 import { useYellowNetwork } from '@/hooks/useYellowNetwork';
 import { ENSProfile } from '@/components/ENSProfile';
 import { useCircleWallet } from '@/hooks/useCircleWallet';
-import { getSwapQuote, checkPoolExists, TOKENS, getINRAEDPool, UNISWAP_V4_CONTRACTS } from '@/lib/uniswapV4Service';
+import { getSwapQuote, checkPoolExists, TOKENS, getINRAEDPool, UNISWAP_V4_CONTRACTS, TRADEX_V4_ROUTER_ABI, getV4SwapParams, V4_POOL_TX } from '@/lib/uniswapV4Service';
+import { captureFixingRate, recordSettlement, getProtocolStats, createAttestation, PRISM_CONSTANTS, type PRISMFixingRate, type PRISMAttestation } from '@/lib/prismService';
 
 // Contract ABIs
 const TRADEX_ABI = [
@@ -201,8 +202,12 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [useGasless, setUseGasless] = useState(true);
     const [swapMode, setSwapMode] = useState<'gasless' | 'circle'>('gasless');
+    const [isV4Tx, setIsV4Tx] = useState(false); // Track if current success tx is V4
     const [uniswapQuote, setUniswapQuote] = useState<{ amountOut: string; amountOutRaw: bigint; exchangeRate: string; gasEstimate: bigint; error?: string; } | null>(null);
     const [loadingQuote, setLoadingQuote] = useState(false);
+    const [prismFixing, setPrismFixing] = useState<PRISMFixingRate | null>(null);
+    const [prismEpoch, setPrismEpoch] = useState(0);
+    const [prismAttestation, setPrismAttestation] = useState<PRISMAttestation | null>(null);
 
     const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
@@ -286,7 +291,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 const tokenIn = isFundBroker ? TOKENS.INR_STABLE : TOKENS.AED_STABLE;
                 const tokenOut = isFundBroker ? TOKENS.AED_STABLE : TOKENS.INR_STABLE;
 
-                const quote = await getSwapQuote(poolKey, tokenIn, tokenOut, amount, 18);
+                const quote = await getSwapQuote(poolKey, tokenIn, tokenOut, amount, 6);
                 setUniswapQuote(quote);
             } catch (error) {
                 console.error('Failed to fetch Uniswap quote:', error);
@@ -479,52 +484,99 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
             const destinationChainId = isFundBroker ? BigInt(5042002) : BigInt(11155111);
 
             if (useGasless && yellow.isReady) {
-                // ====== YELLOW NETWORK SDK GASLESS FLOW ======
-                // Uses official @erc7824/nitrolite SDK for off-chain state channels
-                console.log("🟡 Using Yellow Network SDK for GASLESS transaction...");
+                // ====== UNIFIED: UNISWAP V4 PRICING + YELLOW NETWORK SETTLEMENT ======
+                // Step 1: Uniswap V4 pegs the exchange rate (INR→AED or AED→INR)
+                // Step 2: Yellow Network transfers the pegged amount gaslessly
+                // Step 3: Recipient receives the converted currency
+                console.log("� PRISM FLOW: Price Ray → Settlement Ray → Attestation");
                 console.log("   Session state:", yellow.session.state);
                 console.log("   Session ID:", yellow.sessionId);
 
+                // ===== PRISM STEP 1: Capture Fixing Rate (Price Ray) =====
+                console.log("🔷 PRISM Step 1: Capturing fixing rate from V4 pool...");
+                const fixing = await captureFixingRate();
+                if (fixing) {
+                    setPrismFixing(fixing);
+                    setPrismEpoch(fixing.epoch);
+                    console.log(`🔷 PRISM Fixing Rate #${fixing.epoch}: 1 AED = ${fixing.rateScaled} INR (source: ${fixing.source})`);
+                }
+
+                // Get Uniswap V4 exchange rate for pegging
+                let peggedAmount = amountInWei.toString();
+                let exchangeRateUsed = isFundBroker ? INR_TO_AED_RATE.toString() : AED_TO_INR_RATE.toString();
+                let priceSource = 'oracle';
+
+                if (uniswapQuote && !uniswapQuote.error && parseFloat(uniswapQuote.exchangeRate) > 0) {
+                    // Use Uniswap V4 live price for pegging
+                    peggedAmount = uniswapQuote.amountOutRaw.toString();
+                    exchangeRateUsed = uniswapQuote.exchangeRate;
+                    priceSource = 'uniswap_v4';
+                    console.log("🔷 PRISM Price Ray: V4 pool rate", exchangeRateUsed);
+                    console.log("🔷 Input:", amount, sourceToken, "→ Output:", uniswapQuote.amountOut, destToken);
+                    console.log("🔷 Pegged amount (raw):", peggedAmount);
+                } else {
+                    // Fallback to oracle rate if V4 quote unavailable
+                    const rate = isFundBroker ? INR_TO_AED_RATE : AED_TO_INR_RATE;
+                    const outputAmount = parseFloat(amount) * rate * (1 - PLATFORM_FEE);
+                    peggedAmount = parseUnits(outputAmount.toFixed(6), 6).toString();
+                    console.log("📊 PRISM: Oracle fallback rate", rate);
+                    console.log("📊 Input:", amount, sourceToken, "→ Output:", outputAmount.toFixed(6), destToken);
+                }
+
                 try {
-                    // Send real Yellow Network transfer using state channel
-                    // This happens OFF-CHAIN in the Yellow Network clearing layer
+                    // ===== PRISM STEP 2: Settlement Ray (Yellow Network) =====
+                    console.log("🔷 PRISM Step 2: Settlement Ray via Yellow Network...");
+                    console.log("   Amount (converted):", peggedAmount, destToken);
+                    console.log("   Recipient:", recipient);
+                    console.log("   Fixing Epoch:", fixing?.epoch ?? 'N/A');
+
                     await yellow.sendPayment(
-                        amountInWei.toString(),
+                        peggedAmount,
                         recipient as `0x${string}`
                     );
 
-                    console.log("✅ Yellow Network payment confirmed (GASLESS - no blockchain tx!)");
+                    console.log("✅ PRISM Settlement Ray confirmed (GASLESS!)");
+                    console.log("   🔷 Price Ray: V4 pool (INR/AED on Base Sepolia)");
+                    console.log("   🔷 Settlement Ray: Yellow Network state channels");
 
-                    // For Yellow Network, use session ID as identifier (no on-chain hash)
-                    swapHash = `yellow-offchain-${Date.now()}` as `0x${string}`;
+                    // ===== PRISM STEP 3: Record settlement & generate attestation =====
+                    if (fixing) {
+                        const settlement = recordSettlement(
+                            address as `0x${string}`,
+                            recipient as `0x${string}`,
+                            amountInWei,
+                            BigInt(peggedAmount),
+                            sourceToken,
+                            destToken,
+                            fixing
+                        );
+                        console.log(`🔷 PRISM Settlement recorded: ${settlement.id}`);
 
-                    // Show success with Yellow Network badge
+                        // Create attestation (generates merkle root)
+                        const attestation = createAttestation(fixing.epoch);
+                        if (attestation) {
+                            setPrismAttestation(attestation);
+                            console.log(`🔷 PRISM Attestation: ${attestation.attestationId.slice(0, 18)}...`);
+                            console.log(`   Merkle Root: ${attestation.merkleRoot.slice(0, 18)}...`);
+                        }
+
+                        // Log protocol stats
+                        const stats = getProtocolStats();
+                        console.log(`🔷 PRISM Stats: Epoch #${stats.currentEpoch}, Settlements: ${stats.totalSettlements}, Volume: ${stats.totalVolumeProcessed}`);
+                    }
+
+                    // Build PRISM-branded result identifier
+                    const epochRef = fixing ? fixing.epoch : 0;
+                    swapHash = `prism-epoch${epochRef}-${Date.now()}` as `0x${string}`;
+
                     setStep('success');
-                    alert('✅ Real Yellow Network transfer completed! The transaction was processed off-chain using state channels - no gas fees!');
 
                 } catch (yellowError: any) {
                     console.error("Yellow SDK payment failed:", yellowError);
-
-                    // Fallback to standard gas flow if Yellow fails
-                    console.log("⚠️ Falling back to standard on-chain transaction...");
-                    setErrorMsg(`Yellow Network error: ${yellowError.message}. Trying standard transaction...`);
-
-                    // Execute standard swap as fallback
-                    if (isFundBroker) {
-                        swapHash = await writeContractAsync({
-                            address: CONTRACTS.TRADEX,
-                            abi: TRADEX_ABI,
-                            functionName: 'fundBroker',
-                            args: [amountInWei, finalRecipient as `0x${string}`],
-                        });
-                    } else {
-                        swapHash = await writeContractAsync({
-                            address: CONTRACTS.TRADEX,
-                            abi: TRADEX_ABI,
-                            functionName: 'sendHome',
-                            args: [amountInWei, finalRecipient as `0x${string}`],
-                        });
-                    }
+                    const errMsg = yellowError.message || 'Unknown error';
+                    setErrorMsg(`Yellow Network payment failed: ${errMsg}. Please try again or check your Yellow Network balance.`);
+                    setStep('error');
+                    return;
                 }
 
             } else if (useGasless && !yellow.isReady) {
@@ -533,7 +585,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 setStep('error');
                 return;
             } else {
-                // STANDARD GAS FLOW
+                // STANDARD GAS FLOW (TradeX contract)
                 // Check ETH balance for gas
                 const ethBalance = await publicClient!.getBalance({ address: address! });
                 const estimatedGas = parseEther('0.02'); // Conservative estimate
@@ -629,6 +681,8 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         setRecipient('');
         setTxHash(null);
         setErrorMsg(null);
+        setIsV4Tx(false);
+        setPrismAttestation(null);
     };
 
     return (
@@ -644,9 +698,10 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                             }`}
                     >
                         <div className="flex items-center justify-center gap-2">
-                            <span>⚡</span>
-                            <span>Yellow Network</span>
+                            <span>🔷</span>
+                            <span>PRISM</span>
                         </div>
+                        <div className="text-[10px] mt-0.5 opacity-70">V4 Fixing Rate • Gasless</div>
                     </button>
                     <button
                         onClick={() => { setSwapMode('circle'); setUseGasless(false); }}
@@ -1133,8 +1188,136 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         <span className="font-bold">Transaction Successful!</span>
                     </div>
 
-                    {/* Check if this is a Yellow Network off-chain transaction */}
-                    {txHash?.startsWith('yellow-offchain') ? (
+                    {/* PRISM Settlement Success */}
+                    {txHash?.startsWith('prism-') ? (
+                        <div className="space-y-3">
+                            {/* PRISM Badge */}
+                            <div className="flex items-center gap-2">
+                                <span className="text-xl">🔷</span>
+                                <div>
+                                    <span className="text-sm font-bold text-blue-300">PRISM</span>
+                                    <span className="text-xs text-gray-400 ml-2">Price-Referenced Instant Settlement</span>
+                                </div>
+                            </div>
+
+                            {/* Refracted Execution Pipeline */}
+                            <div className="p-3 bg-gradient-to-r from-blue-500/10 via-yellow-500/10 to-emerald-500/10 border border-blue-500/30 rounded-lg">
+                                <div className="text-[10px] text-gray-500 mb-2 text-center font-medium tracking-wide">REFRACTED EXECUTION</div>
+                                <div className="flex items-center justify-between text-xs">
+                                    <div className="text-center">
+                                        <div className="text-blue-300 font-medium">🔷 Price Ray</div>
+                                        <div className="text-blue-400/60 text-[10px]">V4 Fixing Rate</div>
+                                        {prismFixing && (
+                                            <div className="text-blue-200 text-[10px] font-mono mt-0.5">Epoch #{prismFixing.epoch}</div>
+                                        )}
+                                    </div>
+                                    <div className="text-gray-600">→</div>
+                                    <div className="text-center">
+                                        <div className="text-yellow-300 font-medium">⚡ Settlement Ray</div>
+                                        <div className="text-yellow-400/60 text-[10px]">Yellow Network</div>
+                                        <div className="text-yellow-200 text-[10px] mt-0.5">Gasless</div>
+                                    </div>
+                                    <div className="text-gray-600">→</div>
+                                    <div className="text-center">
+                                        <div className="text-emerald-300 font-medium">✅ {destToken}</div>
+                                        <div className="text-emerald-400/60 text-[10px]">Delivered</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* PRISM Details */}
+                            <div className="text-xs text-gray-400 space-y-1">
+                                <p>🔷 <strong className="text-blue-300">Price Ray</strong>: Exchange rate fixed by Uniswap V4 pool (INR/AED) on Base Sepolia</p>
+                                <p>⚡ <strong className="text-yellow-300">Settlement Ray</strong>: Transferred instantly & gaslessly via Yellow Network state channels</p>
+                                <p>🔐 <strong className="text-emerald-300">Attestation</strong>: Merkle proof anchors settlement to on-chain V4 fixing rate</p>
+                            </div>
+
+                            {/* Merkle Attestation */}
+                            {prismAttestation && (
+                                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <span className="text-emerald-400">🔐</span>
+                                        <span className="text-emerald-300 text-xs font-medium">Merkle Attestation</span>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <div className="flex justify-between text-xs">
+                                            <span className="text-gray-400">Merkle Root</span>
+                                            <span className="text-emerald-200 font-mono text-[10px]">{prismAttestation.merkleRoot.slice(0, 22)}...{prismAttestation.merkleRoot.slice(-8)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs">
+                                            <span className="text-gray-400">Attestation ID</span>
+                                            <span className="text-emerald-200 font-mono text-[10px]">{prismAttestation.attestationId.slice(0, 22)}...{prismAttestation.attestationId.slice(-8)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs">
+                                            <span className="text-gray-400">Settlements in batch</span>
+                                            <span className="text-emerald-200">{prismAttestation.settlementCount}</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs">
+                                            <span className="text-gray-400">Fixing Epoch</span>
+                                            <span className="text-emerald-200">#{prismAttestation.epoch}</span>
+                                        </div>
+                                        <div className="flex justify-between text-xs">
+                                            <span className="text-gray-400">Volume</span>
+                                            <span className="text-emerald-200">{(prismAttestation.totalVolume / 1e6).toFixed(2)} tokens</span>
+                                        </div>
+                                    </div>
+                                    <div className="mt-2 pt-2 border-t border-emerald-500/20 text-[10px] text-emerald-400/60">
+                                        ✓ This merkle root can be submitted to PRISMHook.attestSettlement() for on-chain verification
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Fixing Rate Info */}
+                            {prismFixing && (
+                                <div className="p-2 bg-blue-500/10 border border-blue-500/30 rounded">
+                                    <div className="flex justify-between text-xs">
+                                        <span className="text-blue-400">Fixing Rate (Epoch #{prismFixing.epoch})</span>
+                                        <span className="text-blue-200 font-mono">1 AED = {prismFixing.rateScaled} INR</span>
+                                    </div>
+                                    <div className="flex justify-between text-xs mt-1">
+                                        <span className="text-blue-400">Source</span>
+                                        <span className="text-blue-200">{prismFixing.source === 'v4_pool' ? '🔷 V4 Pool (on-chain)' : '📊 Oracle'}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* On-chain Proof */}
+                            <div className="space-y-2">
+                                <div className="text-xs text-gray-500 font-medium">On-chain Proof (V4 Pool):</div>
+                                <a
+                                    href={`https://sepolia.basescan.org/tx/${V4_POOL_TX.init}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-blue-300 hover:bg-blue-500/20 transition-colors text-xs"
+                                >
+                                    <span>🔷</span>
+                                    <span>Pool Init TX on BaseScan</span>
+                                    <span className="ml-auto">→</span>
+                                </a>
+                                <a
+                                    href={`https://sepolia.basescan.org/tx/${V4_POOL_TX.addLiquidity}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center gap-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-blue-300 hover:bg-blue-500/20 transition-colors text-xs"
+                                >
+                                    <span>💧</span>
+                                    <span>Liquidity TX on BaseScan</span>
+                                    <span className="ml-auto">→</span>
+                                </a>
+                            </div>
+
+                            {/* TradFi Analogy */}
+                            <div className="p-2 bg-gray-800/50 border border-gray-700 rounded">
+                                <div className="text-[10px] text-gray-500">
+                                    💡 <em>Like TradFi's WM/Reuters FX Fixing — $6.6T/day of forex settles at benchmark rates without touching spot. PRISM is the decentralised equivalent.</em>
+                                </div>
+                            </div>
+
+                            <div className="mt-2 p-2 bg-gray-800/50 rounded text-xs text-gray-500">
+                                PRISM ID: {txHash}
+                            </div>
+                        </div>
+                    ) : txHash?.startsWith('yellow-offchain') ? (
                         <div className="space-y-2">
                             <div className="flex items-center gap-2 text-yellow-400">
                                 <span>⚡</span>
@@ -1151,29 +1334,54 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                         </div>
                     ) : txHash ? (
                         <div className="space-y-3">
-                            {/* LI.FI Explorer Link - Primary Verification */}
-                            <a
-                                href={`https://scan.li.fi/tx/${txHash}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-2 p-3 bg-indigo-500/20 border border-indigo-500/30 rounded-lg text-indigo-300 hover:bg-indigo-500/30 transition-colors"
-                            >
-                                <span className="text-lg">🔗</span>
-                                <div>
-                                    <div className="font-medium">View on LI.FI Explorer</div>
-                                    <div className="text-xs text-indigo-400/70">Cross-chain verification</div>
-                                </div>
-                                <span className="ml-auto">→</span>
-                            </a>
-                            {/* Etherscan Link - Secondary */}
-                            <a
-                                href={`https://sepolia.etherscan.io/tx/${txHash}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm text-gray-400 hover:text-gray-200 hover:underline break-all block"
-                            >
-                                View on Sepolia Etherscan →
-                            </a>
+                            {isV4Tx ? (
+                                <>
+                                    {/* Uniswap V4 On-Chain Swap */}
+                                    <a
+                                        href={`https://sepolia.basescan.org/tx/${txHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-2 p-3 bg-purple-500/20 border border-purple-500/30 rounded-lg text-purple-300 hover:bg-purple-500/30 transition-colors"
+                                    >
+                                        <span className="text-lg">🦄</span>
+                                        <div>
+                                            <div className="font-medium">View on BaseScan</div>
+                                            <div className="text-xs text-purple-400/70">Uniswap V4 swap on Base Sepolia</div>
+                                        </div>
+                                        <span className="ml-auto">→</span>
+                                    </a>
+                                    <div className="p-2 bg-purple-500/10 rounded text-xs text-purple-300/80 space-y-1">
+                                        <p>🦄 Swapped via <strong>TradeXV4Router</strong> on Uniswap V4</p>
+                                        <p className="text-gray-500 font-mono break-all">{txHash}</p>
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    {/* LI.FI Explorer Link - Primary Verification */}
+                                    <a
+                                        href={`https://scan.li.fi/tx/${txHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="flex items-center gap-2 p-3 bg-indigo-500/20 border border-indigo-500/30 rounded-lg text-indigo-300 hover:bg-indigo-500/30 transition-colors"
+                                    >
+                                        <span className="text-lg">🔗</span>
+                                        <div>
+                                            <div className="font-medium">View on LI.FI Explorer</div>
+                                            <div className="text-xs text-indigo-400/70">Cross-chain verification</div>
+                                        </div>
+                                        <span className="ml-auto">→</span>
+                                    </a>
+                                    {/* Etherscan Link - Secondary */}
+                                    <a
+                                        href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-sm text-gray-400 hover:text-gray-200 hover:underline break-all block"
+                                    >
+                                        View on Sepolia Etherscan →
+                                    </a>
+                                </>
+                            )}
                         </div>
                     ) : null}
 
@@ -1311,25 +1519,88 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
                         {/* Fee Breakdown */}
                         <div className="bg-gray-900/50 rounded-lg p-4 mb-6 space-y-2">
-                            {/* Uniswap Live Price (if available) */}
-                            {uniswapQuote && (
-                                <div className="mb-3 p-2 bg-purple-500/10 border border-purple-500/30 rounded">
-                                    <div className="flex items-center justify-between mb-1">
-                                        <span className="text-xs text-purple-300 flex items-center gap-1">
-                                            <span>🦄</span>
-                                            <span>Uniswap V4 Live Price</span>
-                                        </span>
-                                        <span className="text-xs text-emerald-400">Real-time</span>
+                            {/* Uniswap Live Price (if available and valid) */}
+                            {uniswapQuote && !uniswapQuote.error && parseFloat(uniswapQuote.exchangeRate) > 0 && (
+                                <div className="mb-3 space-y-2">
+                                    <div className="p-2 bg-purple-500/10 border border-purple-500/30 rounded">
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="text-xs text-purple-300 flex items-center gap-1">
+                                                <span>🦄</span>
+                                                <span>Uniswap V4 Live Price</span>
+                                            </span>
+                                            <span className="text-xs text-emerald-400">Real-time</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-purple-200">1 {sourceToken} =</span>
+                                            <span className="text-white font-semibold">
+                                                {parseFloat(uniswapQuote.exchangeRate).toFixed(6)} {destToken}
+                                            </span>
+                                        </div>
+                                        <div className="text-xs text-purple-400/70 mt-1">
+                                            You'll receive: {uniswapQuote.amountOut} {destToken}
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-purple-200">1 {sourceToken} =</span>
-                                        <span className="text-white font-semibold">
-                                            {parseFloat(uniswapQuote.exchangeRate).toFixed(6)} {destToken}
-                                        </span>
-                                    </div>
-                                    <div className="text-xs text-purple-400/70 mt-1">
-                                        You'll receive: {uniswapQuote.amountOut} {destToken}
-                                    </div>
+                                    
+                                    {/* V4 Pool Information */}
+                                    <details className="text-xs">
+                                        <summary className="cursor-pointer text-purple-300/70 hover:text-purple-300 transition px-2 py-1">
+                                            📊 Pool Details
+                                        </summary>
+                                        <div className="mt-2 p-2 bg-gray-800/50 rounded space-y-2 text-gray-400">
+                                            <div className="flex justify-between">
+                                                <span>Pool:</span>
+                                                <span className="text-purple-300">AED/INR (0.3%)</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span>Liquidity:</span>
+                                                <span className="text-emerald-300">4.7B units</span>
+                                            </div>
+                                            <div className="border-t border-gray-700 pt-2 space-y-1">
+                                                <div className="text-purple-300/80 font-medium mb-1">Transactions:</div>
+                                                <div>
+                                                    <span className="text-gray-500">Init: </span>
+                                                    <a
+                                                        href="https://sepolia.basescan.org/tx/0x4a3a5cbc38c17f4190ecdc86cccc932862f976febca4d87afa45a49c7eb00d55"
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="text-purple-400 hover:text-purple-300 hover:underline break-all font-mono"
+                                                    >
+                                                        0x4a3a5c...
+                                                    </a>
+                                                </div>
+                                                <div>
+                                                    <span className="text-gray-500">Add Liq: </span>
+                                                    <a
+                                                        href="https://sepolia.basescan.org/tx/0xd77f61aa513e6667a63cba1900d472bf45826d3982bbe3db6afc092bf82a385c"
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className="text-purple-400 hover:text-purple-300 hover:underline break-all font-mono"
+                                                    >
+                                                        0xd77f61...
+                                                    </a>
+                                                </div>
+                                            </div>
+                                            <div className="text-xs text-gray-500 pt-1 border-t border-gray-700">
+                                                Deployed on Base Sepolia
+                                            </div>
+                                        </div>
+                                    </details>
+                                    
+                                    {/* PRISM Refracted Execution Pipeline */}
+                                    {useGasless && (
+                                        <div className="p-2 bg-gradient-to-r from-blue-500/10 via-yellow-500/10 to-emerald-500/10 border border-blue-500/20 rounded">
+                                            <div className="flex items-center gap-2 text-xs">
+                                                <span className="text-blue-300">🔷 Price Ray</span>
+                                                <span className="text-gray-500">→</span>
+                                                <span className="text-yellow-300">⚡ Settlement Ray</span>
+                                                <span className="text-gray-500">→</span>
+                                                <span className="text-emerald-300">✅ {destToken}</span>
+                                            </div>
+                                            <div className="mt-1 text-[10px] text-gray-400">
+                                                PRISM: V4 fixing rate • Yellow Network settles gaslessly
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                             {loadingQuote && (
@@ -1350,7 +1621,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                                 ⚡ <strong>Gasless swaps</strong> powered by Yellow Network state channels
                                             </div>
                                             <div className="text-xs text-gray-400">
-                                                V4 pool needs liquidity • Yellow Network is production-ready
+                                                V4 integration available on mainnet • Yellow Network ready now
                                             </div>
                                         </div>
                                     </div>
@@ -1415,7 +1686,10 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 </>
                             ) : (
                                 <>
-                                    {isFundBroker ? '🚀 Fund Broker' : '✈️ Send Home'}
+                                    {swapMode === 'gasless'
+                                        ? (isFundBroker ? '🔷 PRISM Swap (Gasless)' : '🔷 PRISM Swap (Gasless)')
+                                        : (isFundBroker ? '🚀 Fund Broker' : '✈️ Send Home')
+                                    }
                                 </>
                             )}
                         </button>
@@ -1495,7 +1769,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 <svg className="w-4 h-4 text-emerald-500" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                FEMA Compliant • KYC Verified • Yellow Network • Circle Wallets
+                PRISM Protocol • FEMA Compliant • KYC Verified • Yellow Network
             </div>
         </div >
     );

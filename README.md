@@ -1,35 +1,75 @@
-# TradeX - Gasless Cross-Border Remittance Protocol 🚀
+# TradeX — PRISM Protocol 🔷
 
-**The first cross-border payment protocol that's as fast as Binance, as secure as Bitcoin, and as easy to use as PayPal.**
+**Price-Referenced Instant Settlement Mechanism — The first cross-border payment protocol that refracts swaps through Uniswap V4 for on-chain price fixing and settles via state channels for gasless delivery.**
 
 [![HackMoney 2026](https://img.shields.io/badge/HackMoney-2026-blue)](https://hackmoney.xyz)
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.20-purple)](https://soliditylang.org)
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.26-purple)](https://soliditylang.org)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-## 🎉 Latest Update: Uniswap V4 Integration Live!
+## 🔷 What is PRISM?
 
-**Successfully deployed INR/AED liquidity pool on Uniswap V4 Base Sepolia!**
+**PRISM** (Price-Referenced Instant Settlement Mechanism) is a novel Uniswap V4 Hook concept that implements **"Refracted Execution"** — like light through a prism, a single swap intent is split into two paths:
 
-- ✅ First working V4 pool initialization after discovering Sepolia bug
-- ✅ Live on Base Sepolia (Chain ID: 84532)
-- ✅ Pool ID: `0x33ee81b5aedba6f3a2aa1f426c5ee98f8cf9c821524f381d1c1d61d8912af281`
-- ✅ Initial price: 1 AED = 22.727 INR
-- 🔗 [View on BaseScan](https://sepolia.basescan.org/tx/0xee31eaea3bce74e592264e2aa355b9aed490752a4ca77725e8d202541a018465)
+| Ray | What Happens | Where |
+|-----|-------------|-------|
+| **🔷 Price Ray** | V4 AMM liquidity determines the **fixing rate** | On-chain (verifiable, trustless) |
+| **⚡ Settlement Ray** | State channels transfer funds at the fixed rate | Off-chain (gasless, instant) |
 
-**📚 V4 Documentation:**
-- [Complete V4 Journey](./TRADEX_V4_COMPLETE_STORY.md) - Full technical story
-- [Add Liquidity Guide](./V4_LIQUIDITY_MANUAL_GUIDE.md) - Step-by-step instructions
-- [Quick Start](./QUICK_START_V4_LIQUIDITY.txt) - Quick reference card
-- [Demo Strategy](./DEMO_GUIDE.md) - Yellow Network vs V4 positioning
+> *Inspired by TradFi's WM/Reuters FX Fixing — the benchmark rate at which **$6.6 trillion/day** of forex settles without touching spot markets. PRISM is the decentralised, continuous-time equivalent for DeFi remittance.*
+
+```
+User sends 1000 INR → AED
+         │
+         ▼
+┌──────────────────────────────┐
+│     PRISM Hook (V4)          │  ← The "Prism"
+│                              │
+│  beforeSwap():               │
+│    1. Read sqrtPriceX96      │
+│    2. Calculate fixing rate   │
+│    3. Emit PrismFixingRate   │──→ Price Ray (✅ on-chain proof)
+│    4. Return ZERO_DELTA      │
+│       (no AMM execution!)    │
+└──────────────────────────────┘
+         │
+         ▼ (fixing rate event)
+┌──────────────────────────────┐
+│  Yellow Network State Channel │  ← Settlement Ray
+│                              │
+│  Transfer at fixing rate:    │
+│  1000 INR → 44 AED           │
+│  Gasless. Instant. Off-chain.│
+└──────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────┐
+│  On-chain Attestation        │  ← Merkle Proof
+│                              │
+│  Merkle root of off-chain    │
+│  settlements anchored to     │
+│  V4 fixing rate epoch        │
+└──────────────────────────────┘
+```
+
+## 🏆 Key Innovation: Why PRISM is Different
+
+| Project | Hook Purpose | PRISM’s Hook Purpose |
+|---------|-------------|---------------------|
+| **P.A.T** (1st @ ETHGlobal) | TEE-driven AMM pricing | **Split execution across layers** |
+| **FHE Intents** (2nd) | Encrypt swap amounts | **Route settlement off-chain** |
+| **ALA** (3rd) | ML-driven dynamic fees | **Anchor off-chain proofs on-chain** |
+
+**Nobody has used V4 hooks as a decentralised clearing house that intentionally routes settlement OFF the AMM.**
 
 ## 🎯 What is TradeX?
 
-TradeX is a **decentralized remittance protocol** enabling **instant, gasless** INR↔AED payments using state channels, embedded wallets, and human-readable identities. Built for India-UAE financial corridor ($100B+ annual trade).
+TradeX is a **decentralized remittance protocol** powered by **PRISM** — enabling **instant, gasless** INR↔AED payments where Uniswap V4 provides verifiable fixing rates and Yellow Network state channels handle settlement. Built for the India-UAE financial corridor ($100B+ annual trade).
 
-**Revolutionary UX:**
-- 🟡 **Yellow Network**: Instant, gasless transactions via state channels
-- 🔵 **Circle/Arc**: Embedded Web3 wallets (no MetaMask required)
+**The PRISM Stack:**
+- 🔷 **PRISM Hook (V4)**: Captures fixing rates from V4 pool, emits `PrismFixingRate` events, anchors settlement attestations via merkle proofs
+- ⚡ **Yellow Network**: Instant, gasless settlement via state channels at the V4 fixing rate
+- 🔐 **Merkle Attestation**: On-chain proof that off-chain settlements match the V4 pool price
 - 🏷️ **ENS**: Send to `broker-dubai.eth` instead of `0x123...`
 
 ### Two Use Cases:
@@ -41,7 +81,7 @@ TradeX is a **decentralized remittance protocol** enabling **instant, gasless** 
 
 | Method | Time | Fee | UX | Custody |
 |--------|------|-----|-----|---------|
-| **TradeX (Yellow)** | **2s** | **$0** | **broker-dubai.eth** | **Self-custody** |
+| **TradeX PRISM** | **2s** | **$0** | **broker-dubai.eth** | **Self-custody** |
 | Binance | 30min | 0.1% + withdrawal | Account ID | Centralized |
 | Traditional Banks | 3 days | 2.5% | Wire form | Bank-held |
 | SWIFT Transfer | 2-5 days | 3-5% | Complex | Correspondent banks |
@@ -79,24 +119,24 @@ TradeX is a **decentralized remittance protocol** enabling **instant, gasless** 
 
 ## ✨ Key Features
 
-- ⚡ **2-second settlements** - Yellow Network state channels
-- 💰 **$0 gas fees** - Off-chain transactions, on-chain security
+- ⚡ **2-second settlements** - Yellow Network state channels (Settlement Ray)
+- 💰 **$0 gas fees** - Off-chain settlements, on-chain attestations
+- 🔷 **PRISM fixing rates** - Uniswap V4 pool provides verifiable benchmark pricing
+- 🔐 **Merkle attestations** - Cryptographic proof linking off-chain settlements to on-chain rates
 - 🏷️ **Human-readable names** - Send to `broker-dubai.eth` via ENS
-- 🦄 **Live market pricing** - Uniswap V3 pools for real-time rates
-- 🔵 **Embedded wallets** - Circle Programmable Wallets (no MetaMask)
 - 🔒 **Self-custody** - You control your keys, not a centralized exchange
 - 🌐 **Censorship-resistant** - Unstoppable, permissionless protocol
 
-## 🦄 Uniswap Integration
+## 🦄 Uniswap V4 + PRISM Integration
 
-TradeX uses **Uniswap V4 liquidity pools** on Base Sepolia to provide real-time market pricing for INR/AED swaps, replacing fixed oracle rates with dynamic AMM pricing.
+TradeX uses **Uniswap V4 liquidity pools** on Base Sepolia as the **PRISM Price Ray** — providing verifiable, on-chain fixing rates for INR/AED settlements.
 
-### Why Uniswap V4?
+### Why Uniswap V4 for PRISM?
 
-- **Singleton Architecture**: All pools in one contract for gas efficiency
-- **Hooks**: Custom logic for KYC/compliance integration
-- **Native ETH**: Direct ETH trading support
-- **Better Capital Efficiency**: Concentrated liquidity improvements
+- **Singleton Architecture**: All pools in one contract — gas efficient price reads
+- **Hooks**: PRISMHook captures fixing rates in `beforeSwap()` and anchors settlement attestations
+- **Flash Accounting**: Efficient state reads for continuous fixing rate updates
+- **Decentralised Fixing**: Unlike TradFi’s centralised WM/R fix, PRISM’s fixing rate is trustless and verifiable
 
 ### Active Deployments:
 
@@ -111,13 +151,13 @@ TradeX uses **Uniswap V4 liquidity pools** on Base Sepolia to provide real-time 
 - Fee Tier: 0.3% (3000)
 - Explorer: [View on BaseScan](https://sepolia.basescan.org/tx/0xee31eaea3bce74e592264e2aa355b9aed490752a4ca77725e8d202541a018465)
 
-### How It Works:
+### How PRISM Works:
 
-1. **Liquidity Pools**: Initialized INR/AED pool on Uniswap V4 Base Sepolia
-2. **Live Quotes**: Fetch real-time exchange rates from pool state
-3. **Price Discovery**: Market-driven rates based on supply/demand
-4. **Unlock Pattern**: Proper V4 callback implementation for state changes
-5. **Fallback**: Oracle rates as backup if pool doesn't exist
+1. **Price Ray**: PRISMHook reads `sqrtPriceX96` from V4 pool and emits `PrismFixingRate` event
+2. **Fixing Rate**: Rate is epoched and stored on-chain (e.g., Epoch #42: 1 AED = 22.727 INR)
+3. **Settlement Ray**: Yellow Network settles the transfer at the fixing rate (gasless, instant)
+4. **Attestation**: Merkle root of batch settlements is anchored on-chain via `attestSettlement()`
+5. **Verification**: Anyone can prove an off-chain settlement matched the V4 fixing rate via `verifySettlement()`
 
 ### Setup Uniswap V4 Pool (Base Sepolia):
 

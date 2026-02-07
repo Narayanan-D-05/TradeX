@@ -46,7 +46,17 @@
   "helpers": {
     "unlockHelper": "0xE39C2bd670b3d705b81E8cd74CD1D659914947FE",
     "v4LiquidityManager": "0xD44D04eCec4F4f46fab3a492a0E2933bdA3C5Cbd",
-    "simpleV4Router": "0xCC6e02edEE1f8033CfB23982d70AB343d755E5f1"
+    "simpleV4Router": "0xCC6e02edEE1f8033CfB23982d70AB343d755E5f1",
+    "tradeXV4Router": "0x20f91dAB56838b879B95A0318476DEe96C0e792C"
+  },
+  "alternativeV4": {
+    "poolManager": "0x1b832D5395A41446b508632466cf32c6C07D63c7",
+    "router": "0x8C85937cB4EFe36F6Df3dc4632B0b010afB440A0",
+    "tradeXV4Router": "0x20f91dAB56838b879B95A0318476DEe96C0e792C",
+    "note": "Alternative deployment - allows public initialization and swaps",
+    "poolInitTx": "0x4a3a5cbc38c17f4190ecdc86cccc932862f976febca4d87afa45a49c7eb00d55",
+    "addLiquidityTx": "0xd77f61aa513e6667a63cba1900d472bf45826d3982bbe3db6afc092bf82a385c",
+    "firstSwapTx": "0xa875f11762e49d1587948d823206a2881260d7a84842bf7bb8f6c80bad2867f5"
   },
   "explorer": "https://sepolia.basescan.org"
 }
