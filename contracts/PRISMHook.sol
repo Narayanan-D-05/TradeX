@@ -426,6 +426,70 @@ contract PRISMHook {
         emit PrismFixingRate(poolId, epoch, sqrtPriceX96, rateScaled, block.timestamp);
     }
 
+    /**
+     * @notice One-shot: capture fixing rate + attest settlement in a single tx.
+     *         This is the easiest way for frontends to submit attestations.
+     *
+     * @param key              PoolKey for the Uniswap V4 pool
+     * @param merkleRoot       Merkle root of the settlement leaves
+     * @param settlementCount  Number of settlements in this batch
+     * @param totalVolume      Aggregate notional
+     */
+    function captureAndAttest(
+        PoolKey calldata key,
+        bytes32 merkleRoot,
+        uint256 settlementCount,
+        uint256 totalVolume
+    ) external onlyRelayer returns (uint256 epoch, bytes32 attestationId) {
+        bytes32 poolId = _poolKeyToId(key);
+
+        // 1. Capture fixing rate
+        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(PoolId.wrap(poolId));
+        uint256 rateScaled = _sqrtPriceToRate(sqrtPriceX96);
+        
+        currentEpoch++;
+        epoch = currentEpoch;
+
+        FixingRate memory fixing = FixingRate({
+            epoch: epoch,
+            sqrtPriceX96: sqrtPriceX96,
+            rateScaled: rateScaled,
+            timestamp: block.timestamp,
+            poolId: poolId
+        });
+        latestFixing[poolId] = fixing;
+        fixingHistory[poolId][epoch] = fixing;
+        emit PrismFixingRate(poolId, epoch, sqrtPriceX96, rateScaled, block.timestamp);
+
+        // 2. Attest settlement
+        attestationId = keccak256(
+            abi.encodePacked(poolId, epoch, merkleRoot, block.timestamp)
+        );
+
+        attestations[attestationId] = SettlementAttestation({
+            merkleRoot: merkleRoot,
+            epoch: epoch,
+            settlementCount: settlementCount,
+            totalVolume: totalVolume,
+            timestamp: block.timestamp,
+            relayer: msg.sender
+        });
+
+        poolAttestations[poolId].push(attestationId);
+        totalSettlements += settlementCount;
+        totalVolumeProcessed += totalVolume;
+
+        emit SettlementAttested(
+            attestationId,
+            poolId,
+            epoch,
+            merkleRoot,
+            settlementCount,
+            totalVolume,
+            msg.sender
+        );
+    }
+
     // ═══════════════════════════════════════════════════════
     //                    ADMIN
     // ═══════════════════════════════════════════════════════

@@ -10,8 +10,8 @@ export default function Home() {
   const { chainId, isConnected } = useAccount();
   const { switchChain } = useSwitchChain();
 
-  const requiredChainId = mode === 'fundBroker' ? 11155111 : 5042002;
-  const targetNetworkName = mode === 'fundBroker' ? 'Sepolia' : 'Arc Testnet';
+  const requiredChainId = mode === 'fundBroker' ? 11155111 : 84532;
+  const targetNetworkName = mode === 'fundBroker' ? 'Sepolia' : 'Base Sepolia';
   const isWrongNetwork = isConnected && chainId !== requiredChainId;
 
   return (
@@ -38,8 +38,8 @@ export default function Home() {
             <a href="/ens" className="text-sm text-blue-400 font-medium hover:text-blue-300 transition flex items-center gap-1.5">
               🏷️ ENS Demo
             </a>
-            <a href="/circle" className="text-sm text-gray-400 hover:text-white transition">
-              🔵 Circle Gateway
+            <a href="/contacts" className="text-sm text-purple-400 font-medium hover:text-purple-300 transition flex items-center gap-1.5">
+              📇 Contacts
             </a>
             <a href="#" className="text-sm text-gray-400 hover:text-white transition">Stats</a>
             <a href="#" className="text-sm text-gray-400 hover:text-white transition">Docs</a>
@@ -160,7 +160,7 @@ export default function Home() {
                     AE
                   </div>
                   <p className="font-medium text-white">UAE</p>
-                  <p className="text-xs text-gray-500">Arc Testnet</p>
+                  <p className="text-xs text-gray-500">Base Sepolia</p>
                   <span className="inline-block mt-2 px-3 py-1 bg-gray-800 text-gray-300 rounded-full text-xs">
                     AED stable
                   </span>

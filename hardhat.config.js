@@ -47,13 +47,13 @@ module.exports = {
             chainId: 11155111,
             timeout: 120000,
         },
-        arc: {
-            url: "https://rpc.testnet.arc.network",
-            accounts: process.env.DEPLOYER_PRIVATE_KEY
-                ? [process.env.DEPLOYER_PRIVATE_KEY]
-                : [],
-            chainId: 5042002,
-        },
+        // arc: {
+        //     url: "https://rpc.testnet.arc.network",
+        //     accounts: process.env.DEPLOYER_PRIVATE_KEY
+        //         ? [process.env.DEPLOYER_PRIVATE_KEY]
+        //         : [],
+        //     chainId: 5042002,
+        // },
         baseSepolia: {
             url: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
             accounts: process.env.DEPLOYER_PRIVATE_KEY

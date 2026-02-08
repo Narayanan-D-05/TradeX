@@ -4,10 +4,11 @@ import { useState, useEffect } from 'react';
 import { useAccount, useWriteContract, useReadContract, useSwitchChain, useSignTypedData, usePublicClient, useEnsName, useEnsAddress } from 'wagmi';
 import { parseEther, parseUnits, formatEther, formatUnits, encodeFunctionData, isAddress } from 'viem';
 import { useYellowNetwork } from '@/hooks/useYellowNetwork';
+import { useContacts } from '@/hooks/useContacts';
 import { ENSProfile } from '@/components/ENSProfile';
-import { useCircleWallet } from '@/hooks/useCircleWallet';
 import { getSwapQuote, checkPoolExists, TOKENS, getINRAEDPool, UNISWAP_V4_CONTRACTS, TRADEX_V4_ROUTER_ABI, getV4SwapParams, V4_POOL_TX } from '@/lib/uniswapV4Service';
 import { captureFixingRate, recordSettlement, getProtocolStats, createAttestation, PRISM_CONSTANTS, type PRISMFixingRate, type PRISMAttestation } from '@/lib/prismService';
+import { PRISM_HOOK_CONFIG, PRISM_HOOK_ABI, formatAttestationForSubmit, isPRISMHookDeployed, getAttestationTxLink, getPoolKey } from '@/lib/prismHookService';
 
 // Contract ABIs
 const TRADEX_ABI = [
@@ -201,13 +202,19 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
     const [txHash, setTxHash] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [useGasless, setUseGasless] = useState(true);
-    const [swapMode, setSwapMode] = useState<'gasless' | 'circle'>('gasless');
+    const [swapMode, setSwapMode] = useState<'gasless'>('gasless');
     const [isV4Tx, setIsV4Tx] = useState(false); // Track if current success tx is V4
     const [uniswapQuote, setUniswapQuote] = useState<{ amountOut: string; amountOutRaw: bigint; exchangeRate: string; gasEstimate: bigint; error?: string; } | null>(null);
     const [loadingQuote, setLoadingQuote] = useState(false);
     const [prismFixing, setPrismFixing] = useState<PRISMFixingRate | null>(null);
     const [prismEpoch, setPrismEpoch] = useState(0);
     const [prismAttestation, setPrismAttestation] = useState<PRISMAttestation | null>(null);
+    const [showContacts, setShowContacts] = useState(false);
+    const [attestationTxHash, setAttestationTxHash] = useState<string | null>(null);
+    const [isSubmittingAttestation, setIsSubmittingAttestation] = useState(false);
+
+    // Contacts hook
+    const { contacts, getRecentContacts, markContactUsed } = useContacts();
 
     const { address, isConnected, chainId } = useAccount();
     const { writeContractAsync } = useWriteContract();
@@ -217,9 +224,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
     // Yellow Network SDK Integration
     const yellow = useYellowNetwork();
-
-    // Circle Wallet Integration
-    const circleWallet = useCircleWallet();
 
     // ENS Resolution
     const isEnsName = recipient.includes('.eth');
@@ -272,8 +276,8 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
     const sourceToken = isFundBroker ? 'INR' : 'AED';
     const destToken = isFundBroker ? 'AED' : 'INR';
-    const sourceNetwork = isFundBroker ? 'Ethereum Sepolia' : 'Arc Testnet';
-    const destNetwork = isFundBroker ? 'Arc Testnet' : 'Ethereum Sepolia';
+    const sourceNetwork = isFundBroker ? 'Ethereum Sepolia' : 'Base Sepolia';
+    const destNetwork = isFundBroker ? 'Base Sepolia' : 'Ethereum Sepolia';
 
     const sourceTokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
 
@@ -409,8 +413,8 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         setErrorMsg(null);
         setTxHash(null);
 
-        // Determine chain based on mode (for Yellow/Circle modes)
-        const targetChainId = isFundBroker ? 11155111 : 5042002; // Sepolia or Arc
+        // Determine chain based on mode
+        const targetChainId = isFundBroker ? 11155111 : 84532; // Sepolia or Base Sepolia
 
         // Ensure network before starting
         if (chainId !== targetChainId) {
@@ -481,7 +485,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
 
             let swapHash;
             const tokenOut = isFundBroker ? CONTRACTS.AED_STABLE : CONTRACTS.INR_STABLE;
-            const destinationChainId = isFundBroker ? BigInt(5042002) : BigInt(11155111);
+            const destinationChainId = isFundBroker ? BigInt(84532) : BigInt(11155111);
 
             if (useGasless && yellow.isReady) {
                 // ====== UNIFIED: UNISWAP V4 PRICING + YELLOW NETWORK SETTLEMENT ======
@@ -558,6 +562,49 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                             setPrismAttestation(attestation);
                             console.log(`🔷 PRISM Attestation: ${attestation.attestationId.slice(0, 18)}...`);
                             console.log(`   Merkle Root: ${attestation.merkleRoot.slice(0, 18)}...`);
+                            
+                            // Auto-submit attestation to PRISMHook (single tx)
+                            (async () => {
+                                if (!isPRISMHookDeployed()) {
+                                    console.log('⚠️ PRISMHook not deployed - skipping on-chain submission');
+                                    return;
+                                }
+                                
+                                try {
+                                    setIsSubmittingAttestation(true);
+                                    const attestData = formatAttestationForSubmit(attestation);
+                                    const poolKey = getPoolKey();
+                                    
+                                    // Switch to Base Sepolia if needed
+                                    if (chainId !== PRISM_HOOK_CONFIG.chainId) {
+                                        console.log(`🔄 Switching to Base Sepolia (current: ${chainId})...`);
+                                        await switchChainAsync({ chainId: PRISM_HOOK_CONFIG.chainId });
+                                        console.log('✅ Switched to Base Sepolia');
+                                    }
+                                    
+                                    // Single tx: captureAndAttest — captures fixing rate + submits attestation
+                                    console.log('🔗 Submitting PRISM attestation (captureAndAttest)...');
+                                    const hash = await writeContractAsync({
+                                        address: PRISM_HOOK_CONFIG.address,
+                                        abi: PRISM_HOOK_ABI,
+                                        functionName: 'captureAndAttest',
+                                        args: [
+                                            poolKey,
+                                            attestData.merkleRoot,
+                                            attestData.settlementCount,
+                                            attestData.totalVolume,
+                                        ],
+                                        chainId: PRISM_HOOK_CONFIG.chainId,
+                                    });
+                                    
+                                    setAttestationTxHash(hash);
+                                    console.log('✅ Attestation submitted on-chain:', hash);
+                                } catch (error) {
+                                    console.error('❌ Failed to auto-submit attestation:', error);
+                                } finally {
+                                    setIsSubmittingAttestation(false);
+                                }
+                            })();
                         }
 
                         // Log protocol stats
@@ -686,6 +733,8 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
         setErrorMsg(null);
         setIsV4Tx(false);
         setPrismAttestation(null);
+        setAttestationTxHash(null);
+        setIsSubmittingAttestation(false);
     };
 
     return (
@@ -705,18 +754,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                             <span>PRISM</span>
                         </div>
                         <div className="text-[10px] mt-0.5 opacity-70">V4 Fixing Rate • Gasless</div>
-                    </button>
-                    <button
-                        onClick={() => { setSwapMode('circle'); setUseGasless(false); }}
-                        className={`flex-1 px-3 py-2.5 rounded-md text-sm font-medium transition-all ${swapMode === 'circle'
-                            ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50 shadow-lg shadow-blue-500/20'
-                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/30'
-                            }`}
-                    >
-                        <div className="flex items-center justify-center gap-2">
-                            <span>🔵</span>
-                            <span>Circle</span>
-                        </div>
                     </button>
                 </div>
             )}
@@ -997,172 +1034,6 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                 </div>
             )}
 
-            {/* Circle Wallet Status Panel - Real Embedded Wallet */}
-            {swapMode === 'circle' && isConnected && (
-                <div className="mb-4 p-4 bg-gradient-to-br from-blue-500/10 via-blue-500/5 to-purple-500/10 border border-blue-500/30 rounded-lg">
-                    {/* Header */}
-                    <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 bg-gradient-to-br from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
-                                <span className="text-white text-xs font-bold">🔵</span>
-                            </div>
-                            <span className="text-sm font-medium text-blue-200">Circle Embedded Wallet</span>
-                            {circleWallet.isLoading && (
-                                <span className="text-xs text-blue-400 animate-pulse">⏳</span>
-                            )}
-                        </div>
-                        {circleWallet.isConnected ? (
-                            <button
-                                onClick={circleWallet.disconnect}
-                                className="text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300 border border-red-500/30 transition"
-                            >
-                                Disconnect
-                            </button>
-                        ) : (
-                            <button
-                                onClick={circleWallet.connect}
-                                disabled={circleWallet.isLoading}
-                                className="text-xs px-3 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-blue-300 border border-blue-500/30 disabled:opacity-50 transition"
-                            >
-                                {circleWallet.isLoading ? 'Connecting...' : 'Connect Wallet'}
-                            </button>
-                        )}
-                    </div>
-
-                    {/* Not Connected Help Message */}
-                    {!circleWallet.isConnected && !circleWallet.isLoading && (
-                        <div className="p-3 bg-blue-500/5 border border-blue-500/20 rounded text-xs">
-                            <div className="flex items-start gap-2">
-                                <span>💡</span>
-                                <div>
-                                    <p className="font-medium text-blue-200 mb-1">Embedded Web3 Wallet</p>
-                                    <p className="text-blue-400/80">
-                                        Circle Wallet is a fully embedded Web3 wallet with real private key management. 
-                                        No browser extension needed! Switch networks, sign transactions, and use Yellow + LI.FI seamlessly.
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Error Display */}
-                    {circleWallet.error && (
-                        <div className="mt-2 p-3 bg-red-500/10 border border-red-500/30 rounded text-xs">
-                            <div className="flex items-start gap-2">
-                                <span className="text-red-400">⚠️</span>
-                                <div className="flex-1">
-                                    <p className="text-red-300 font-medium mb-1">Error</p>
-                                    <p className="text-red-400/80">{circleWallet.error}</p>
-                                    <button
-                                        onClick={circleWallet.connect}
-                                        className="mt-2 text-xs px-2 py-1 bg-red-500/20 hover:bg-red-500/30 rounded text-red-300 border border-red-500/30"
-                                    >
-                                        Retry Connection
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Connected Wallet Info */}
-                    {circleWallet.isConnected && circleWallet.address && (
-                        <div className="space-y-3">
-                            {/* Address & Network Row */}
-                            <div className="grid grid-cols-2 gap-3">
-                                <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20">
-                                    <span className="text-blue-500/60 text-xs block mb-1">Wallet Address</span>
-                                    <span className="text-blue-200 font-mono text-xs">
-                                        {circleWallet.address.slice(0, 10)}...{circleWallet.address.slice(-8)}
-                                    </span>
-                                </div>
-                                <div className="p-2 bg-purple-500/10 rounded border border-purple-500/20">
-                                    <span className="text-purple-500/60 text-xs block mb-1">Network</span>
-                                    <span className="text-purple-200 text-xs font-medium">
-                                        {circleWallet.chainName || 'Unknown'}
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* Balance */}
-                            <div className="p-3 bg-emerald-500/10 rounded border border-emerald-500/20">
-                                <span className="text-emerald-500/60 text-xs block mb-1">Native Balance</span>
-                                <div className="flex items-baseline gap-2">
-                                    <span className="text-emerald-200 text-lg font-mono font-bold">
-                                        {circleWallet.balance ? parseFloat(circleWallet.balance).toFixed(4) : '0.0000'}
-                                    </span>
-                                    <span className="text-emerald-400/60 text-xs">
-                                        {circleWallet.chainId === 11155111 ? 'ETH' : 'ARC'}
-                                    </span>
-                                </div>
-                                <button
-                                    onClick={circleWallet.refreshBalance}
-                                    className="mt-2 text-xs text-emerald-400 hover:text-emerald-300 transition"
-                                >
-                                    🔄 Refresh Balance
-                                </button>
-                            </div>
-
-                            {/* Network Switcher */}
-                            <div className="p-3 bg-gray-800/50 rounded border border-gray-700">
-                                <span className="text-gray-400 text-xs block mb-2">Switch Network</span>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => circleWallet.switchNetwork(11155111)}
-                                        disabled={circleWallet.chainId === 11155111 || circleWallet.isLoading}
-                                        className={`flex-1 px-3 py-2 rounded text-xs font-medium transition ${
-                                            circleWallet.chainId === 11155111
-                                                ? 'bg-blue-500 text-white border-2 border-blue-400'
-                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-300 border border-gray-600'
-                                        } disabled:opacity-50`}
-                                    >
-                                        {circleWallet.chainId === 11155111 ? '✓ ' : ''}Sepolia
-                                    </button>
-                                    <button
-                                        onClick={() => circleWallet.switchNetwork(5042002)}
-                                        disabled={circleWallet.chainId === 5042002 || circleWallet.isLoading}
-                                        className={`flex-1 px-3 py-2 rounded text-xs font-medium transition ${
-                                            circleWallet.chainId === 5042002
-                                                ? 'bg-purple-500 text-white border-2 border-purple-400'
-                                                : 'bg-gray-700 hover:bg-gray-600 text-gray-300 border border-gray-600'
-                                        } disabled:opacity-50`}
-                                    >
-                                        {circleWallet.chainId === 5042002 ? '✓ ' : ''}Arc Testnet
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* Features */}
-                            <div className="flex flex-wrap gap-1.5">
-                                <span className="px-2 py-1 bg-yellow-500/10 text-yellow-400 rounded text-[10px] border border-yellow-500/20 font-medium">
-                                    ⚡ Yellow Network Ready
-                                </span>
-                                <span className="px-2 py-1 bg-purple-500/10 text-purple-400 rounded text-[10px] border border-purple-500/20 font-medium">
-                                    🌉 LI.FI Bridge Ready
-                                </span>
-                                <span className="px-2 py-1 bg-emerald-500/10 text-emerald-400 rounded text-[10px] border border-emerald-500/20 font-medium">
-                                    🔐 Self-Custody
-                                </span>
-                            </div>
-
-                            {/* Private Key Warning */}
-                            <div className="mt-2 p-2 bg-orange-500/10 border border-orange-500/20 rounded text-xs">
-                                <div className="flex items-start gap-2">
-                                    <span className="text-orange-400">⚠️</span>
-                                    <p className="text-orange-300/80">
-                                        Your private key is stored locally in your browser. Never share it with anyone!
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Footer */}
-                    <div className="mt-3 pt-2 border-t border-blue-500/20 text-xs text-blue-500/60 text-center">
-                        Circle Programmable Wallets • Powered by Viem
-                    </div>
-                </div>
-            )}
-
             {/* Testnet Info Banner */}
             {isConnected && (
                 <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
@@ -1242,14 +1113,38 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                         <span className="text-emerald-400">🔐</span>
                                         <span className="text-emerald-300 text-xs font-medium">Merkle Attestation</span>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <div className="flex justify-between text-xs">
-                                            <span className="text-gray-400">Merkle Root</span>
-                                            <span className="text-emerald-200 font-mono text-[10px]">{prismAttestation.merkleRoot.slice(0, 22)}...{prismAttestation.merkleRoot.slice(-8)}</span>
+                                    <div className="space-y-2">
+                                        <div className="text-xs">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="text-gray-400">Merkle Root</span>
+                                                <button
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(prismAttestation.merkleRoot);
+                                                        alert('Merkle Root copied to clipboard!');
+                                                    }}
+                                                    className="text-emerald-200 hover:text-emerald-100 font-mono text-[10px] transition-colors flex items-center gap-1"
+                                                    title="Click to copy full hash"
+                                                >
+                                                    <span>{prismAttestation.merkleRoot.slice(0, 10)}...{prismAttestation.merkleRoot.slice(-6)}</span>
+                                                    <span>📋</span>
+                                                </button>
+                                            </div>
                                         </div>
-                                        <div className="flex justify-between text-xs">
-                                            <span className="text-gray-400">Attestation ID</span>
-                                            <span className="text-emerald-200 font-mono text-[10px]">{prismAttestation.attestationId.slice(0, 22)}...{prismAttestation.attestationId.slice(-8)}</span>
+                                        <div className="text-xs">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="text-gray-400">Attestation ID</span>
+                                                <button
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(prismAttestation.attestationId);
+                                                        alert('Attestation ID copied to clipboard!');
+                                                    }}
+                                                    className="text-emerald-200 hover:text-emerald-100 font-mono text-[10px] transition-colors flex items-center gap-1"
+                                                    title="Click to copy full hash"
+                                                >
+                                                    <span>{prismAttestation.attestationId.slice(0, 10)}...{prismAttestation.attestationId.slice(-6)}</span>
+                                                    <span>📋</span>
+                                                </button>
+                                            </div>
                                         </div>
                                         <div className="flex justify-between text-xs">
                                             <span className="text-gray-400">Settlements in batch</span>
@@ -1264,8 +1159,40 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                             <span className="text-emerald-200">{(prismAttestation.totalVolume / 1e6).toFixed(2)} tokens</span>
                                         </div>
                                     </div>
-                                    <div className="mt-2 pt-2 border-t border-emerald-500/20 text-[10px] text-emerald-400/60">
-                                        ✓ This merkle root can be submitted to PRISMHook.attestSettlement() for on-chain verification
+                                    <div className="mt-2 pt-2 border-t border-emerald-500/20 space-y-2">
+                                        {isSubmittingAttestation ? (
+                                            <div className="flex items-center justify-center gap-2 py-2 text-xs text-emerald-400">
+                                                <span className="animate-spin">⏳</span>
+                                                <span>Auto-submitting to PRISMHook...</span>
+                                            </div>
+                                        ) : !attestationTxHash ? (
+                                            <div className="text-[10px] text-amber-400/80 flex items-start gap-1">
+                                                <span>⚠️</span>
+                                                <span>PRISMHook not deployed or submission pending</span>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                <div className="flex items-center gap-2 text-xs text-emerald-300">
+                                                    <span>✅</span>
+                                                    <span className="font-medium">Attestation Submitted On-Chain!</span>
+                                                </div>
+                                                <a
+                                                    href={getAttestationTxLink(attestationTxHash)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="block p-2 bg-emerald-500/10 border border-emerald-500/30 rounded text-xs hover:bg-emerald-500/20 transition"
+                                                >
+                                                    <div className="text-emerald-400 mb-1">Transaction Hash:</div>
+                                                    <div className="text-emerald-200 font-mono break-all">
+                                                        {attestationTxHash.slice(0, 20)}...{attestationTxHash.slice(-18)}
+                                                    </div>
+                                                    <div className="text-emerald-400 mt-1 flex items-center gap-1">
+                                                        <span>🔍</span>
+                                                        <span>View on BaseScan →</span>
+                                                    </div>
+                                                </a>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             )}
@@ -1494,14 +1421,111 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 {isFundBroker ? 'Broker Wallet Address' : 'Recipient Wallet Address'}
                                 <span className="ml-2 text-xs text-blue-400">(Supports ENS names)</span>
                             </label>
-                            <input
-                                type="text"
-                                value={recipient}
-                                onChange={(e) => setRecipient(e.target.value)}
-                                placeholder="0x... or name.eth"
-                                className="input-field font-mono text-sm"
-                                disabled={step !== 'idle'}
-                            />
+                            <div className="relative z-30">
+                                <input
+                                    type="text"
+                                    value={recipient}
+                                    onChange={(e) => setRecipient(e.target.value)}
+                                    onFocus={() => {
+                                        if (contacts.length > 0) {
+                                            setShowContacts(true);
+                                        }
+                                    }}
+                                    placeholder="0x... or name.eth"
+                                    className="input-field font-mono text-sm pr-20"
+                                    disabled={step !== 'idle'}
+                                />
+                                {contacts.length > 0 && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setShowContacts(!showContacts);
+                                        }}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 hover:border-blue-500/50 rounded text-xs text-blue-300 hover:text-blue-200 flex items-center gap-1.5 transition-all"
+                                        type="button"
+                                    >
+                                        <span>📇</span>
+                                        <span className="font-medium">{contacts.length}</span>
+                                    </button>
+                                )}
+                                
+                                {/* Contacts Dropdown Menu */}
+                                {showContacts && contacts.length > 0 && (
+                                    <>
+                                        {/* Backdrop to close on click outside */}
+                                        <div 
+                                            className="fixed inset-0 z-40" 
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setShowContacts(false);
+                                            }}
+                                        />
+                                        
+                                        <div className="absolute top-full left-0 right-0 mt-2 z-50 bg-gray-800 border-2 border-blue-500/50 rounded-lg shadow-2xl shadow-blue-500/20 overflow-hidden">
+                                            {/* Header */}
+                                            <div className="px-3 py-2 bg-gradient-to-r from-blue-500/20 to-purple-500/20 border-b border-gray-700">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-semibold text-blue-300">📇 Saved Contacts</span>
+                                                    <span className="text-xs text-gray-400">{contacts.length} total</span>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Contacts List */}
+                                            <div className="max-h-[300px] overflow-y-auto bg-gray-800">
+                                                {getRecentContacts(10).map((contact) => (
+                                                    <button
+                                                        key={contact.id}
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            setRecipient(contact.address);
+                                                            markContactUsed(contact.id);
+                                                            setShowContacts(false);
+                                                        }}
+                                                        type="button"
+                                                        className="w-full px-3 py-3 hover:bg-blue-500/10 border-b border-gray-700/50 last:border-0 text-left transition-colors group"
+                                                    >
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-sm font-medium text-white group-hover:text-blue-300 transition-colors">
+                                                                    {contact.label}
+                                                                </div>
+                                                                <div className="text-xs text-gray-400 font-mono truncate">
+                                                                    {contact.address.slice(0, 10)}...{contact.address.slice(-8)}
+                                                                </div>
+                                                                {contact.ensName && (
+                                                                    <div className="text-xs text-purple-400 mt-0.5">
+                                                                        {contact.ensName}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <span className="text-blue-400 group-hover:text-blue-300 transition-colors text-lg">→</span>
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            
+                                            {/* Footer */}
+                                            {contacts.length > 10 && (
+                                                <div className="px-3 py-2 bg-gray-900/80 border-t border-gray-700 text-center">
+                                                    <a 
+                                                        href="/contacts" 
+                                                        className="text-xs text-blue-400 hover:text-blue-300 transition-colors font-medium"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setShowContacts(false);
+                                                        }}
+                                                    >
+                                                        View all {contacts.length} contacts →
+                                                    </a>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
                             
                             {/* ENS Resolution Display with Rich Profile */}
                             {(isEnsName || ensName) && recipient && (
@@ -1713,7 +1737,7 @@ export function SwapCard({ mode, onSwap }: SwapCardProps) {
                                 onClick={async () => {
                                     if (!address || !publicClient) return;
                                     setStep('minting');
-                                    const chainId = isFundBroker ? 11155111 : 5042002;
+                                    const chainId = isFundBroker ? 11155111 : 84532;
                                     try {
                                         const tokenAddress = isFundBroker ? CONTRACTS.INR_STABLE : CONTRACTS.AED_STABLE;
                                         const hash = await writeContractAsync({

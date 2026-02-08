@@ -13,6 +13,7 @@ import {
 } from '@rainbow-me/rainbowkit/wallets';
 import {
     sepolia,
+    baseSepolia,
     arbitrum,
     base,
     mainnet,
@@ -33,17 +34,7 @@ const config = getDefaultConfig({
             wallets: [argentWallet, trustWallet, ledgerWallet],
         },
     ],
-    chains: [
-        sepolia,
-        {
-            id: 5042002,
-            name: 'Arc Testnet',
-            nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-            rpcUrls: {
-                default: { http: ['https://rpc.arc.testnet.com'] }, // Fictional Arc RPC
-            },
-        } as any
-    ],
+    chains: [sepolia, baseSepolia],
     ssr: true,
 });
 

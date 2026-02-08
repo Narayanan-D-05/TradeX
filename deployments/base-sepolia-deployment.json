@@ -58,5 +58,14 @@
     "addLiquidityTx": "0xd77f61aa513e6667a63cba1900d472bf45826d3982bbe3db6afc092bf82a385c",
     "firstSwapTx": "0xa875f11762e49d1587948d823206a2881260d7a84842bf7bb8f6c80bad2867f5"
   },
-  "explorer": "https://sepolia.basescan.org"
+  "explorer": "https://sepolia.basescan.org",
+  "prismHook": {
+    "address": "0x875C879f19E3DcE7D7Eb8e4871DcCb030d067992",
+    "owner": "0x1cC4bf265cA5497C97741abc1a263dc48f96E754",
+    "authorizedRelayers": [
+      "0x1cC4bf265cA5497C97741abc1a263dc48f96E754"
+    ],
+    "poolManager": "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408",
+    "deploymentTx": "0x5b3a63e440866d188e9ad0ec7d00e846b3061bb951f6491cc6ca96052239e2af"
+  }
 }

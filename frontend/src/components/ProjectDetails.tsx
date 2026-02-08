@@ -77,7 +77,7 @@ export function ProjectDetails() {
                             AE
                         </div>
                         <div className="text-xl font-bold text-white">UAE</div>
-                        <div className="text-sm text-gray-400">Arc Testnet</div>
+                        <div className="text-sm text-gray-400">Base Sepolia</div>
                         <div className="px-3 py-1 bg-blue-900/30 border border-blue-500 rounded-full text-xs text-blue-300">
                             AED-stable
                         </div>
@@ -340,32 +340,33 @@ export function ProjectDetails() {
                 </div>
 
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 font-mono text-xs md:text-sm text-gray-400 overflow-x-auto shadow-2xl shadow-blue-900/20">
-                    <div className="mb-2 text-gray-500"># TradeX Architecture Flow</div>
+                    <div className="mb-2 text-gray-500"># TradeX PRISM Architecture</div>
                     <pre className="text-[10px] md:text-xs">{`
 ┌──────────────────────────────────────────────────────────┐
-│                   TradeX Protocol                        │
+│                   TradeX PRISM Protocol                    │
 │                                                          │
 │  ┌─────────────┐        ┌──────────────┐               │
-│  │   Sepolia   │        │  LI.FI Zap   │               │
-│  │   (India)   │───────▶│   Router     │               │
-│  │  INR-stable │  INR   │              │               │
-│  └─────────────┘        │  Settlement  │               │
-│                         │   Service    │               │
-│  ┌─────────────┐        │              │               │
-│  │     Arc     │◀───────│              │               │
+│  │   Sepolia   │        │  Uniswap V4   │               │
+│  │   (India)   │───────▶│   Pricing    │               │
+│  │  INR-stable │  INR   │   Oracle      │               │
+│  └─────────────┘        │              │               │
+│                         │  Yellow      │               │
+│  ┌─────────────┐        │  Network     │               │
+│  │ Base Sepolia◀───────│  Gasless     │               │
 │  │    (UAE)    │  AED   └──────────────┘               │
 │  │  AED-stable │                                       │
 │  └─────────────┘                                       │
 │                                                          │
-│  Cross-Chain Bridge: 45 seconds • 0.3% fee             │
-│  Atomic Guarantees: HTLC • Timelock Refunds            │
+│  Uniswap V4 Pool (Base Sepolia): INR/AED pricing         │
+│  Yellow Network: Gasless state channel settlement        │
+│  Atomic Guarantees: ERC-7824 • Merkle Attestation        │
 └──────────────────────────────────────────────────────────┘
 
 Technologies Stack:
-• Arc Network     → USDC Liquidity Hub & AED settlement
-• LI.FI           → Cross-chain routing & aggregation
+• Uniswap V4     → On-chain pricing oracle (Base Sepolia)
 • Yellow Network  → Gasless sessions (ERC-7824)
 • Ethereum        → Sepolia testnet for INR transactions
+• Base            → Base Sepolia for AED & V4 pool
 • Hardhat         → Smart contract development & testing
                     `}</pre>
                 </div>
@@ -490,12 +491,8 @@ Technologies Stack:
                 <div className="flex flex-wrap justify-center gap-12 opacity-70 grayscale hover:grayscale-0 transition-all duration-500">
                     {/* Simple text placeholders for logos */}
                     <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 bg-blue-500 rounded-lg"></div>
-                        <span className="text-xl font-bold font-sans">Arc</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 bg-purple-600 rounded-lg"></div>
-                        <span className="text-xl font-bold font-sans">LI.FI</span>
+                        <div className="w-8 h-8 bg-pink-500 rounded-lg"></div>
+                        <span className="text-xl font-bold font-sans">Uniswap</span>
                     </div>
                     <div className="flex items-center gap-2">
                         <div className="w-8 h-8 bg-yellow-500 rounded-lg"></div>
